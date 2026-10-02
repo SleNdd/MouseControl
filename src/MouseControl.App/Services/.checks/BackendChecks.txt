@@ -1,0 +1,213 @@
+using System.Text;
+using MouseControl.App.Services;
+using MouseControl.Core;
+
+internal static class BackendChecks
+{
+    private static void Check(bool condition, string message)
+    {
+        if (!condition) throw new InvalidOperationException(message);
+    }
+    private static void Eventually(Func<bool> predicate, string message) =>
+        Check(SpinWait.SpinUntil(predicate, TimeSpan.FromSeconds(3)), message);
+    private static void Throws(Action action)
+    {
+        try { action(); } catch (Exception) { return; }
+        throw new InvalidOperationException("Expected a failure.");
+    }
+    private static Profile Profile() => ProfileConfiguration.CreateDefault().Profiles[0] with { Motion = new(1, 0, .5, 1000) };
+
+    public static void Protocol()
+    {
+        Check(ArduinoProtocol.Crc(Encoding.ASCII.GetBytes("123456789")) == 0x29B1, "CRC16-CCITT golden vector failed.");
+        Check(Convert.ToHexString(ArduinoProtocol.Encode(new(ArduinoCommand.Hello, 0x01020304, 0))) ==
+            "A55A0101040302010000000000006D44", "Exact HELLO frame golden vector failed.");
+        var packet = new ArduinoPacket(ArduinoCommand.Move, 0x01020304, 7, -127, 127);
+        var bytes = ArduinoProtocol.Encode(packet);
+        Check(bytes.Length == 16 && bytes[4] == 4 && bytes[7] == 1 && bytes[12] == 0x81, "Frame layout changed.");
+        Check(ArduinoProtocol.TryDecode(bytes, out var decoded) && decoded == packet, "Frame roundtrip failed.");
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            var corrupt = bytes.ToArray(); corrupt[i] ^= 1;
+            Check(!ArduinoProtocol.TryDecode(corrupt, out _), "Corrupt byte was accepted.");
+        }
+        using var good = new FakeTransport();
+        using var backend = new ArduinoInputBackend(good, "COM9", 123);
+        Check(backend.Connected && good.Commands.Single().Command == ArduinoCommand.Hello, "Identification was not first.");
+        Check(good.MaximumReadTimeout <= 500 && good.MaximumWriteTimeout <= 100, "Handshake bounds changed.");
+        var bad = new FakeTransport { Transform = packet => ArduinoProtocol.Encode(packet with { X = (sbyte)'X' }) };
+        Throws(() => new ArduinoInputBackend(bad, "COM9", 124));
+        Check(!bad.IsOpen && bad.Commands.Count == 1, "Bad identity did not close without retry.");
+    }
+
+    public static void Segments()
+    {
+        using var transport = new FakeTransport { ChunkSize = 3 };
+        using var backend = new ArduinoInputBackend(transport, "COM9", 50);
+        backend.Move(200, -200);
+        var moves = transport.Commands.Where(x => x.Command == ArduinoCommand.Move).ToArray();
+        Check(moves.Length == 2 && moves[0].X == 127 && moves[1].X == 73 && moves.Sum(x => x.Y) == -200, "Segmentation lost displacement.");
+        Check(transport.MaximumOutstanding == 1 && transport.AckBytesRemaining == 0, "Commands were pipelined.");
+        backend.Stop(); backend.Ping();
+        Check(transport.Commands.Select(p => p.Sequence).SequenceEqual(new uint[] { 0, 1, 2, 3, 4 }), "Sequences did not advance.");
+        Check(transport.Commands[3].Command == ArduinoCommand.Stop && transport.Commands[3].X == 0, "Stop missing.");
+        var before = transport.Commands.Count;
+        Throws(() => backend.Move(255, 0));
+        Check(transport.Commands.Count == before, "Out-of-bound request wrote serial data.");
+        Check(transport.LastReadTimeout <= 150, "Command timeout exceeds 150ms.");
+    }
+
+    public static void AckFailures()
+    {
+        Action<FakeTransport>[] failures = {
+            t => t.DropReply = true,
+            t => t.Transform = p => ArduinoProtocol.Encode(p with { Sequence = p.Sequence - 1 }),
+            t => t.Transform = p => ArduinoProtocol.Encode(p with { Session = p.Session + 1 }),
+            t => t.Transform = p => { var b = ArduinoProtocol.Encode(p); b[15] ^= 1; return b; },
+            t => t.Transform = p => ArduinoProtocol.Encode(p with { Command = ArduinoCommand.Nack, X = 2 }),
+            t => t.FailWrite = true,
+            t => t.ReadDelayMilliseconds = 200
+        };
+        foreach (var failure in failures)
+        {
+            using var transport = new FakeTransport();
+            using var backend = new ArduinoInputBackend(transport, "COM9", 60);
+            failure(transport);
+            Throws(() => backend.Move(200, 0));
+            Check(!backend.Connected && transport.Commands.Count <= 2, "Failed ACK retried or sent second chunk.");
+            var before = transport.Commands.Count;
+            Throws(() => backend.Move(1, 0));
+            backend.Stop();
+            Check(transport.Commands.Count == before, "Faulted backend wrote another command.");
+        }
+    }
+
+    public static void Switching()
+    {
+        int held = 0, windows = 0;
+        var arduino = new FakeBackend("COM9");
+        using var runtime = new RuntimeService(false, null, _ => Volatile.Read(ref held) != 0, () => false,
+            (_, _) => { Interlocked.Increment(ref windows); return 1; }, null,
+            port => port == "COM9" ? arduino : throw new IOException("port unavailable"));
+        runtime.SetProfile(Profile()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+        Eventually(() => windows > 3, "Windows backend did not start.");
+        Check(runtime.SetBackend(InputBackendKind.Arduino, "COM9", out var error), error);
+        Check(!runtime.Enabled && runtime.BackendConnected && runtime.BackendKind == InputBackendKind.Arduino, "Switch did not freeze output.");
+        var windowCount = windows;
+        runtime.SetEnabled(true); Thread.Sleep(40);
+        Check(arduino.Moves == 0 && windows == windowCount, "Switch bypassed fresh hold or used old backend.");
+        held = 0; Thread.Sleep(40); held = 1;
+        Eventually(() => arduino.Moves > 3, "Arduino fake did not activate.");
+        Check(!runtime.SetBackend(InputBackendKind.Arduino, "COM10", out error) && error.Contains("port unavailable", StringComparison.Ordinal), "Failed connection was accepted.");
+        Check(!runtime.Enabled && runtime.BackendPort == "COM9" && arduino.Connected && arduino.Stops == 1, "Failure discarded prior connection or failed stop.");
+        Check(runtime.SetBackend(InputBackendKind.Windows, null, out error), error);
+        Check(!arduino.Connected && arduino.Disposes == 1 && !runtime.Enabled, "Old connection was not disposed.");
+    }
+
+    public static void Disconnect()
+    {
+        foreach (var stopFailure in new[] { false, true })
+        {
+            int held = 0, events = 0;
+            var fake = new FakeBackend("COM9");
+            using var runtime = new RuntimeService(false, null, _ => Volatile.Read(ref held) != 0, () => false,
+                (_, _) => throw new InvalidOperationException("Windows fallback must not run"), null, _ => fake);
+            runtime.BackendChanged += () => Interlocked.Increment(ref events);
+            runtime.SetProfile(Profile());
+            Check(runtime.SetBackend(InputBackendKind.Arduino, "COM9", out _), "Fake connect failed.");
+            runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+            Eventually(() => fake.Moves > 3, "Fake did not begin.");
+            if (stopFailure)
+            {
+                fake.FailStop = true; runtime.SetEnabled(false);
+            }
+            else fake.FailMove = true;
+            Eventually(() => !runtime.BackendConnected && !runtime.Enabled, "Failure did not mark offline and disable.");
+            Check(runtime.BackendKind == InputBackendKind.Arduino && runtime.BackendPort == "COM9" && events >= 2,
+                "Failure switched kind/port or missed notification.");
+            runtime.SetEnabled(true);
+            Check(!runtime.Enabled && runtime.Status.Contains("offline", StringComparison.OrdinalIgnoreCase), "Offline backend was enabled.");
+        }
+    }
+
+    public static void ReconnectIsolation()
+    {
+        int connections = 0;
+        using var runtime = new RuntimeService(false, null, _ => false, () => false, (_, _) => 1, null,
+            port => { Interlocked.Increment(ref connections); return new FakeBackend(port); });
+        Check(runtime.SelectBackendDisconnected(InputBackendKind.Arduino, "COM9", out _), "Restore failed.");
+        Check(connections == 0 && !runtime.BackendConnected, "Restore opened a port.");
+        Check(runtime.TryReconnectArduino("COM9", out _), "Selected reconnect failed.");
+        runtime.SetEnabled(true);
+        Check(runtime.TryReconnectArduino("COM9", out _) && runtime.Enabled && connections == 1, "Duplicate queued reconnect disabled healthy runtime.");
+        Check(runtime.SetBackend(InputBackendKind.Windows, null, out _), "Windows selection failed.");
+        runtime.SetEnabled(true);
+        Check(!runtime.TryReconnectArduino("COM9", out _) && runtime.Enabled && connections == 1 && runtime.BackendKind == InputBackendKind.Windows,
+            "Obsolete reconnect overwrote newer selection.");
+    }
+
+    public static void SimulationIsolation()
+    {
+        int connections = 0;
+        using var runtime = new RuntimeService(true, null, _ => false, () => false, null, null,
+            port => { connections++; throw new InvalidOperationException("must not open"); });
+        Check(!runtime.SetBackend(InputBackendKind.Arduino, "COM9", out _) && connections == 0, "Simulation opened serial.");
+    }
+}
+
+internal sealed class FakeTransport : IArduinoTransport
+{
+    private readonly Queue<byte> _reply = new();
+    public bool IsOpen { get; private set; } = true;
+    public List<ArduinoPacket> Commands { get; } = new();
+    public Func<ArduinoPacket, byte[]>? Transform { get; set; }
+    public bool DropReply { get; set; }
+    public bool FailWrite { get; set; }
+    public int ChunkSize { get; set; } = 16;
+    public int ReadDelayMilliseconds { get; set; }
+    public int MaximumOutstanding { get; private set; }
+    public int MaximumReadTimeout { get; private set; }
+    public int LastReadTimeout { get; private set; }
+    public int MaximumWriteTimeout { get; private set; }
+    public int AckBytesRemaining => _reply.Count;
+    public void DiscardInput() => _reply.Clear();
+    public void Write(byte[] bytes, int timeoutMilliseconds)
+    {
+        if (!IsOpen || FailWrite) throw new IOException("fake write failed");
+        if (_reply.Count != 0) throw new InvalidOperationException("more than one outstanding command");
+        if (!ArduinoProtocol.TryDecode(bytes, out var request)) throw new InvalidOperationException("bad outgoing frame");
+        Commands.Add(request);
+        MaximumOutstanding = Math.Max(MaximumOutstanding, 1);
+        MaximumWriteTimeout = Math.Max(MaximumWriteTimeout, timeoutMilliseconds);
+        var reply = request with { Command = request.Command == ArduinoCommand.Hello ? ArduinoCommand.HelloAck : ArduinoCommand.Ack,
+            X = request.Command == ArduinoCommand.Hello ? (sbyte)'M' : (sbyte)0, Y = request.Command == ArduinoCommand.Hello ? (sbyte)'C' : (sbyte)0 };
+        if (!DropReply) foreach (var value in Transform?.Invoke(reply) ?? ArduinoProtocol.Encode(reply)) _reply.Enqueue(value);
+    }
+    public int Read(byte[] bytes, int offset, int count, int timeoutMilliseconds)
+    {
+        if (ReadDelayMilliseconds > 0) Thread.Sleep(ReadDelayMilliseconds);
+        MaximumReadTimeout = Math.Max(MaximumReadTimeout, timeoutMilliseconds);
+        LastReadTimeout = timeoutMilliseconds;
+        if (!IsOpen || _reply.Count == 0) throw new TimeoutException("fake ACK timeout");
+        var size = Math.Min(Math.Min(count, _reply.Count), ChunkSize);
+        for (var i = 0; i < size; i++) bytes[offset + i] = _reply.Dequeue();
+        return size;
+    }
+    public void Dispose() { IsOpen = false; _reply.Clear(); }
+}
+
+internal sealed class FakeBackend(string port) : IInputBackend
+{
+    private int _moves, _stops, _disposes;
+    public InputBackendKind Kind => InputBackendKind.Arduino;
+    public string Port => port;
+    public bool Connected { get; private set; } = true;
+    public int Moves => Volatile.Read(ref _moves);
+    public int Stops => Volatile.Read(ref _stops);
+    public int Disposes => Volatile.Read(ref _disposes);
+    public bool FailMove { get; set; }
+    public bool FailStop { get; set; }
+    public void Move(int dx, int dy) { if (FailMove) throw new IOException("fake unplug"); Interlocked.Increment(ref _moves); }
+    public void Stop() { Interlocked.Increment(ref _stops); if (FailStop) throw new IOException("fake stop timeout"); }
+    public void Dispose() { if (Connected) Interlocked.Increment(ref _disposes); Connected = false; }
+}

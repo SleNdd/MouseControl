@@ -1,0 +1,81 @@
+# Application services
+
+## Runtime
+
+`RuntimeService` starts disabled and owns its gate, motion generator, fractional relative
+input-unit carry, and submission under one lock. `SetEnabled(false)` returns only after any
+current submission finishes; no later submission is queued. An 8 ms `PeriodicTimer` uses
+monotonic elapsed time. Gaps over 100 ms invalidate activation and clear motion/carry. Editing,
+switching profiles, suspending, and resuming require a fresh release/press.
+
+Each fresh active transition constructs a generator with a new seed from `Random.Shared`.
+An optional seed provider supports deterministic development checks. Humanization zero remains
+seed independent. Normal status strings are `Idle`, `Active`, `Paused`, and `Disabled`.
+
+The runtime pauses while its own process is foreground or `SetSuspended(true)` is in force.
+Logical L/R activation honors swapped buttons; Alt and Shift use generic modifier state.
+Windows submission is a single documented relative `SendInput` MOVE event. Arduino submission
+uses an identified Leonardo connection and the standard Arduino Mouse library. A failed
+submission disables motion and surfaces a status. Simulation routes deltas to the optional
+callback and never calls `SendInput` or opens serial.
+
+Runtime public methods are thread-safe. `StatusChanged` may originate on the worker thread;
+observers run outside the state lock and cannot terminate the worker by throwing. Dispatch
+to the UI thread, then read `Status` and `Enabled` to avoid displaying a superseded snapshot.
+`Dispose()` disables and joins the worker; a callback on that worker cannot join itself, but
+marks it disposed so it immediately exits without further submission.
+Setters on a terminal/disposed runtime safely do nothing; they do not silently restart it.
+
+## Input backends
+
+`InputBackendKind` is `Windows` or `Arduino`. Runtime exposes `BackendKind`, `BackendPort`,
+`BackendConnected`, and a `BackendChanged` notification. Read current properties after
+dispatching the notification onto the UI thread.
+
+`SetBackend(kind, port, out error)` explicitly selects/connects a backend. Every attempt
+disables motion, clears fractional carry, and stops the active session first. Success replaces
+and disposes the previous connection. Failure preserves the previous backend, with motion
+disabled. A successful connection remains disabled until explicitly enabled and freshly held.
+
+`SelectBackendDisconnected(kind, port, out error)` restores Arduino selection or handles
+device removal without opening serial. It retains Arduino kind/port with Connected false,
+so it cannot fall back to Windows output. Enabling an offline backend is refused.
+`TryReconnectArduino(port, out error)` reconnects only the still-selected offline Arduino
+endpoint. Queued attempts for a different/currently replaced selection are discarded; an
+already-connected matching endpoint is left untouched.
+
+Runtime opens only the supplied COM port; it neither enumerates ports nor runs a heartbeat.
+The serial client uses a 500 ms identification deadline and 150 ms command deadline, with
+100 ms bounded writes. CRC16 frames carry a connection nonce and increasing sequence. Only
+one command is outstanding; each MOVE chunk waits for its ACK before the next chunk. Relative
+components are segmented to ±127, with at most two chunks per tick. STOP is an acknowledged
+ordering barrier. Disabling and backend switching serialize with these operations.
+
+A failed/uncertain Arduino command closes the connection, disables output, and retains the
+offline Arduino selection. It is never retransmitted automatically: a missing ACK cannot
+establish whether an already-written MOVE executed. A firmware ACK reports command handling,
+not target-application processing. See the [firmware setup and protocol](../../../firmware/MouseControlLeonardo/README.md).
+
+## Window integration
+
+`WindowBridge` must be created, called, and disposed on the HWND owner thread. It owns the
+rooted subclass delegate, hotkey registrations, WTS registration, and tray icon. The shared
+IDI_APPLICATION icon requires no DestroyIcon. Menus are destroyed in a finally block. Global
+hotkey updates register a distinct candidate with MOD_NOREPEAT before removing the old one;
+failure preserves the old binding. Tray menus publish suspension on both open and close.
+Session lock/disconnect and power suspension publish suspension; resume requires fresh input.
+Explorer restart recreates the icon. `Hide()` refuses when the tray is unavailable.
+Native visibility requests perform the change and then publish `ShowRequested`/`HideRequested`
+notifications. Public `Show()`/`Hide()` do not emit those events recursively.
+
+Availability failures are exposed through `AvailabilityError` and `AvailabilityChanged`;
+the UI must display them. `TrayAvailable` and `HotkeyAvailable` describe current integration.
+Native tray, hotkey, session, and input integration require separate Windows verification.
+
+## Development checks
+
+The service harness is excluded by the application's hidden-directory source glob:
+
+```powershell
+dotnet run --project src/MouseControl.App/Services/.checks/ServiceChecks.csproj -c Release
+```

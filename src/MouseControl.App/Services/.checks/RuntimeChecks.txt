@@ -1,0 +1,193 @@
+using MouseControl.App.Services;
+using MouseControl.Core;
+
+var tests = new (string Name, Action Run)[]
+{
+    ("simulation default disabled and fresh-hold rearm", Rearm),
+    ("disable serializes with output and disposal joins", SerializedDisable),
+    ("output exceptions disable safely", OutputFailure),
+    ("observer exceptions do not terminate worker", ObserverFailure),
+    ("zero/unexpected backend result disables and permits safe retry", BackendFailure),
+    ("foreground suspension requires a fresh hold", ForegroundSuspension),
+    ("worker observer may dispose without self-join", ObserverDisposal),
+    ("fresh activations obtain a new seed and stopped setters are safe", FreshSeeds),
+    ("WTS session transition mapping", SessionTransitions),
+    ("Arduino frame checksum and identification", BackendChecks.Protocol),
+    ("Arduino segmented movement, one outstanding ACK and stop", BackendChecks.Segments),
+    ("Arduino bad/stale ACK and timeout close without retry", BackendChecks.AckFailures),
+    ("backend switches disable, preserve on failure, and stay isolated", BackendChecks.Switching),
+    ("Arduino stop failure and unplug disable without fallback", BackendChecks.Disconnect),
+    ("obsolete reconnect cannot change current selection", BackendChecks.ReconnectIsolation),
+    ("simulation cannot open serial", BackendChecks.SimulationIsolation)
+};
+var failures = 0;
+foreach (var test in tests)
+{
+    try { test.Run(); Console.WriteLine($"PASS {test.Name}"); }
+    catch (Exception ex) { failures++; Console.Error.WriteLine($"FAIL {test.Name}: {ex}"); }
+}
+Console.WriteLine($"{tests.Length - failures}/{tests.Length} service checks passed.");
+return failures == 0 ? 0 : 1;
+
+static void Assert(bool condition, string message)
+{
+    if (!condition) throw new InvalidOperationException(message);
+}
+static void Eventually(Func<bool> predicate, string message)
+{
+    Assert(SpinWait.SpinUntil(predicate, TimeSpan.FromSeconds(3)), message);
+}
+static Profile Sample() => ProfileConfiguration.CreateDefault().Profiles[0] with { Motion = new(1, 0, .5, 1000) };
+static void ReleaseAndPress(ref int held)
+{
+    Volatile.Write(ref held, 0);
+    Thread.Sleep(40);
+    Volatile.Write(ref held, 1);
+}
+
+static void Rearm()
+{
+    int held = 1, count = 0;
+    using var runtime = new RuntimeService(true, (_, _) => Interlocked.Increment(ref count),
+        _ => Volatile.Read(ref held) != 0, () => false);
+    runtime.SetProfile(Sample());
+    Thread.Sleep(60);
+    Assert(!runtime.Enabled && count == 0, "Runtime must start disabled.");
+    runtime.SetEnabled(true);
+    Thread.Sleep(60);
+    Assert(count == 0, "Enable activated an already-held binding.");
+    ReleaseAndPress(ref held);
+    Eventually(() => Volatile.Read(ref count) > 3, "Fresh hold generated no output.");
+    runtime.SetProfile(Sample());
+    var afterEdit = Volatile.Read(ref count);
+    Thread.Sleep(60);
+    Assert(count == afterEdit, "Editing resumed held input.");
+    ReleaseAndPress(ref held);
+    Eventually(() => count > afterEdit, "Edit rearm failed.");
+    runtime.SetSuspended(true);
+    var paused = count;
+    Thread.Sleep(40);
+    runtime.SetSuspended(false);
+    Thread.Sleep(60);
+    Assert(count == paused, "Unsuspending resumed held input.");
+    ReleaseAndPress(ref held);
+    Eventually(() => count > paused, "Suspend rearm failed.");
+    runtime.SetEnabled(false);
+    var disabled = count;
+    Thread.Sleep(60);
+    Assert(count == disabled, "Output occurred after disable returned.");
+}
+
+static void SerializedDisable()
+{
+    int held = 0, count = 0;
+    using var entered = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    using var runtime = new RuntimeService(true, (_, _) =>
+    {
+        Interlocked.Increment(ref count); entered.Set(); release.Wait(TimeSpan.FromSeconds(3));
+    }, _ => Volatile.Read(ref held) != 0, () => false);
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true);
+    Thread.Sleep(40); held = 1;
+    Assert(entered.Wait(TimeSpan.FromSeconds(3)), "Output callback did not start.");
+    var disable = Task.Run(() => runtime.SetEnabled(false));
+    Thread.Sleep(40);
+    Assert(!disable.IsCompleted, "Disable bypassed the submission lock.");
+    release.Set(); disable.GetAwaiter().GetResult();
+    var disabled = count;
+    Thread.Sleep(50); Assert(count == disabled, "Output queued after disable.");
+    runtime.Dispose();
+    Assert(runtime.Status == "Stopped" && !runtime.Enabled, "Disposal did not stop runtime.");
+    Thread.Sleep(40); Assert(count == disabled, "Output followed disposal.");
+}
+
+static void OutputFailure()
+{
+    int held = 0;
+    using var runtime = new RuntimeService(true, (_, _) => throw new IOException("simulated sink failure"),
+        _ => Volatile.Read(ref held) != 0, () => false);
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+    Eventually(() => !runtime.Enabled, "Sink exception did not disable motion.");
+    Assert(runtime.Status.Contains("simulated sink failure", StringComparison.Ordinal), "Failure status was lost.");
+}
+
+static void ObserverFailure()
+{
+    int held = 0, count = 0;
+    using var runtime = new RuntimeService(true, (_, _) => Interlocked.Increment(ref count),
+        _ => Volatile.Read(ref held) != 0, () => false);
+    runtime.StatusChanged += _ => throw new InvalidOperationException("bad observer");
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+    Eventually(() => count > 3, "Observer exception terminated worker.");
+    Assert(runtime.Enabled, "Observer exception disabled motion.");
+}
+
+static void BackendFailure()
+{
+    foreach (var result in new uint[] { 0, 2 })
+    {
+        int held = 0, submitted = 0;
+        using var runtime = new RuntimeService(false, null, _ => Volatile.Read(ref held) != 0, () => false,
+            (_, _) => { Interlocked.Increment(ref submitted); return result; });
+        runtime.SetProfile(Sample()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+        Eventually(() => !runtime.Enabled, "Unexpected backend count did not disable.");
+        Assert(submitted == 1 && runtime.Status.Contains("Input submission failed", StringComparison.Ordinal), "Failure retried or status missing.");
+        runtime.SetEnabled(true); Thread.Sleep(50);
+        Assert(submitted == 1, "Failure recovery submitted while activation remained held.");
+        ReleaseAndPress(ref held);
+        Eventually(() => submitted == 2 && !runtime.Enabled, "Fresh retry did not observe backend result.");
+    }
+}
+
+static void ForegroundSuspension()
+{
+    int held = 0, foreground = 0, count = 0;
+    using var runtime = new RuntimeService(true, (_, _) => Interlocked.Increment(ref count),
+        _ => Volatile.Read(ref held) != 0, () => Volatile.Read(ref foreground) != 0);
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+    Eventually(() => count > 3, "Motion did not begin.");
+    foreground = 1;
+    Eventually(() => runtime.Status == "Paused", "Own foreground did not pause.");
+    var paused = count;
+    foreground = 0; Thread.Sleep(60);
+    Assert(count == paused, "Returning from own foreground resumed a held binding.");
+    ReleaseAndPress(ref held);
+    Eventually(() => count > paused, "Foreground rearm failed.");
+}
+
+static void ObserverDisposal()
+{
+    int held = 0;
+    using var runtime = new RuntimeService(true, (_, _) => { }, _ => Volatile.Read(ref held) != 0, () => false);
+    runtime.StatusChanged += status => { if (status == "Active") runtime.Dispose(); };
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+    Eventually(() => runtime.Status == "Stopped", "Observer disposal deadlocked or failed.");
+    Assert(!runtime.Enabled, "Disposed worker remains enabled.");
+}
+
+static void FreshSeeds()
+{
+    int held = 0, seeds = 0, count = 0;
+    using var runtime = new RuntimeService(true, (_, _) => Interlocked.Increment(ref count),
+        _ => Volatile.Read(ref held) != 0, () => false, () => Interlocked.Increment(ref seeds));
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+    Eventually(() => count > 3, "First activation failed.");
+    Assert(seeds == 1 && runtime.Status == "Active", "First session did not use one seed.");
+    held = 0;
+    Eventually(() => runtime.Status == "Idle", "Release did not end session.");
+    held = 1;
+    Eventually(() => seeds == 2, "Second activation reused its seed.");
+    runtime.Dispose();
+    runtime.SetEnabled(true); runtime.SetProfile(Sample()); runtime.Invalidate(); runtime.SetSuspended(false);
+    Assert(!runtime.Enabled && runtime.Status == "Stopped", "Stopped setters revived or changed terminal state.");
+}
+
+static void SessionTransitions()
+{
+    foreach (var notification in new nuint[] { 2, 4, 6, 7 })
+        Assert(WindowBridge.SessionBlockedAfter(notification, false), $"WTS {notification} should suspend.");
+    foreach (var notification in new nuint[] { 1, 3, 5, 8 })
+        Assert(!WindowBridge.SessionBlockedAfter(notification, true), $"WTS {notification} should resume.");
+    Assert(WindowBridge.SessionBlockedAfter(9, true) && !WindowBridge.SessionBlockedAfter(9, false),
+        "Unknown/control-change notification should preserve prior suspension.");
+}
