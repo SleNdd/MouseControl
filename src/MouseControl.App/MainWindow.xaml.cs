@@ -262,6 +262,10 @@ public sealed partial class MainWindow : Window
 
     private void ReplaceProfile(Profile profile)
     {
+        var existing = _configuration.Profiles.FirstOrDefault(p => p.Id == profile.Id);
+        // Native controls may repeat their current value after initialization.
+        // An equal edit must not reset movement or rewrite saved settings.
+        if (existing is null || profile == existing) return;
         _configuration = _configuration with { Profiles = _configuration.Profiles.Select(p => p.Id == profile.Id ? profile : p).ToArray() };
         _runtime.SetProfile(Current);
         RefreshControls();
@@ -614,6 +618,10 @@ public sealed partial class MainWindow : Window
             Save();
             var reloaded = _store.Load();
             if (!reloaded.Success || reloaded.Configuration!.AppSettings != _configuration.AppSettings || !reloaded.Configuration.Profiles.SequenceEqual(_configuration.Profiles)) throw new Exception("Profile roundtrip failed.");
+            var beforeEqualEdits = _configuration;
+            foreach (var profile in _configuration.Profiles)
+                ReplaceProfile(profile with { Motion = profile.Motion with { } });
+            if (_dirty || !ReferenceEquals(beforeEqualEdits, _configuration)) throw new Exception("Equal active/inactive profile edits must be ignored.");
             _bridge.Hide(); OnHidden(); _bridge.Show(); OnShown();
             SetVector(0.18, 0.42);
             if (!FormatHotkey(new GlobalHotkey((int)VirtualKey.F8, HotkeyModifiers.Win)).StartsWith("Win + ", StringComparison.Ordinal)) throw new Exception("Hotkey display failed.");
@@ -645,7 +653,7 @@ public sealed partial class MainWindow : Window
                 await SaveScreenshot(capture.Pixels, capture.Width, capture.Height, screenshot);
             }
             finally { NativeScreenshot.RestoreAfterCapture(captureHwnd); }
-            File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = true, simulation = true, synchronizedControls = true, createdProfile = true, numericEdit = true, numericButtonsHidden = true, speedRange = MotionUi.MaximumSpeed, oneUnitStep = true, availableModels = MotionUi.Models.Select(model => model.ToString()).ToArray(), combinedEffects = true, profileRoundtrip = true, requestedOutputRate = _runtime.RequestedOutputRateHz, offlineArduinoBlocked = true, windowsBackendRestored = true, trayAvailable = _bridge.TrayAvailable, screenshot }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = true, simulation = true, synchronizedControls = true, createdProfile = true, numericEdit = true, numericButtonsHidden = true, speedRange = MotionUi.MaximumSpeed, oneUnitStep = true, availableModels = MotionUi.Models.Select(model => model.ToString()).ToArray(), combinedEffects = true, profileRoundtrip = true, unchangedProfileEditsIgnored = true, requestedOutputRate = _runtime.RequestedOutputRateHz, offlineArduinoBlocked = true, windowsBackendRestored = true, trayAvailable = _bridge.TrayAvailable, screenshot }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(output)!); File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = false, error = ex.ToString() })); }
         finally { Close(); }
