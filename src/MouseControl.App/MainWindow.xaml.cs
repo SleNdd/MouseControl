@@ -52,13 +52,14 @@ public sealed partial class MainWindow : Window
         var loaded = _store.Load();
         _configuration = loaded.Configuration ?? ProfileConfiguration.CreateDefault();
         _configuration = MotionUi.UseSpeedUnits(_configuration, out var convertedSpeedUnits);
+        _configuration = MotionUi.UseSimpleModels(_configuration, out var convertedModels);
         if (!loaded.Success)
         {
             _initialError = "Settings could not be read. The original file is preserved. This session saves to a recovery file. " + loaded.Error;
             _store = new ProfileStore(System.IO.Path.Combine(_dataFolder, "profiles.recovery-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".json"));
         }
         InitializeComponent();
-        ModelCombo.ItemsSource = Enum.GetValues<MotionModel>();
+        ModelCombo.ItemsSource = MotionUi.Models;
         Title = "MouseControl";
         SystemBackdrop = new DesktopAcrylicBackdrop();
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -106,7 +107,7 @@ public sealed partial class MainWindow : Window
         _updating = false;
         RefreshStatus();
         RefreshBackendStatus();
-        if (convertedSpeedUnits) MarkDirty();
+        if (convertedSpeedUnits || convertedModels) MarkDirty();
         var keyMenu = new MenuFlyout();
         var escapeKey = new MenuFlyoutItem { Text = "Use Escape as toggle key" };
         escapeKey.Click += (_, _) => TryCaptureHotkey(new GlobalHotkey((int)VirtualKey.Escape, HotkeyModifiers.None));
@@ -166,12 +167,12 @@ public sealed partial class MainWindow : Window
         HotkeyButton.Content = _capturing ? "Press a key…" : FormatHotkey(_configuration.AppSettings.ToggleHotkey);
         ModelCombo.SelectedItem = motion.Model;
         ToolTipService.SetToolTip(ModelCombo, MotionUi.Describe(motion.Model));
-        PulseEffectCheck.IsChecked = motion.PulseOverlay || motion.Model == MotionModel.Pulse;
-        PulseEffectCheck.IsEnabled = motion.Model != MotionModel.Pulse;
-        CorrectionEffectCheck.IsChecked = motion.CorrectionsOverlay || motion.Model == MotionModel.Corrections;
-        CorrectionEffectCheck.IsEnabled = motion.Model != MotionModel.Corrections;
-        var effects = (PulseEffectCheck.IsChecked == true ? 1 : 0) + (CorrectionEffectCheck.IsChecked == true ? 1 : 0);
-        EffectsButton.Content = effects == 0 ? "Effects" : $"Effects · {effects}";
+        PulseEffectCheck.IsChecked = motion.PulseOverlay;
+        CorrectionEffectCheck.IsChecked = motion.CorrectionsOverlay;
+        HumanSlider.IsEnabled = HumanNumber.IsEnabled = motion.Model != MotionModel.Classic || motion.PulseOverlay || motion.CorrectionsOverlay;
+        ToolTipService.SetToolTip(HumanSlider, HumanSlider.IsEnabled
+            ? "Strength of the selected model and effects."
+            : "Classic moves straight. Enable Pulse or Nonlinearity, or select Bezier to use Humanization.");
         _updating = before;
         RebuildPreview();
     }
@@ -318,8 +319,8 @@ public sealed partial class MainWindow : Window
         if (_updating || _runtime is null) return;
         ReplaceProfile(Current with { Motion = Current.Motion with
         {
-            PulseOverlay = PulseEffectCheck.IsChecked == true && Current.Motion.Model != MotionModel.Pulse,
-            CorrectionsOverlay = CorrectionEffectCheck.IsChecked == true && Current.Motion.Model != MotionModel.Corrections
+            PulseOverlay = PulseEffectCheck.IsChecked == true,
+            CorrectionsOverlay = CorrectionEffectCheck.IsChecked == true
         } });
     }
     private void Enabled_Toggled(object sender, RoutedEventArgs e) { if (_updating || _runtime is null) return; _runtime.SetEnabled(EnabledSwitch.IsOn); RefreshStatus(); }
@@ -495,10 +496,6 @@ public sealed partial class MainWindow : Window
     private async void Settings_Click(object sender, RoutedEventArgs e)
     {
         CancelCapture(); _runtime.Invalidate();
-        var model = new ComboBox { Header = "Motion model", HorizontalAlignment = HorizontalAlignment.Stretch };
-        model.ItemsSource = Enum.GetValues<MotionModel>(); model.SelectedItem = Current.Motion.Model;
-        var description = new TextBlock { Text = MotionUi.Describe(Current.Motion.Model), TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 };
-        model.SelectionChanged += (_, _) => { if (model.SelectedItem is MotionModel selected) description.Text = MotionUi.Describe(selected); };
         var range = new TextBlock { Text = "Axis range: −2000 to +2000 input units/s, step 1. Windows pointer settings affect screen speed.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 };
         var rates = new[] { 125, 250, 500, 1000 };
         var outputRate = new ComboBox { Header = "Requested output rate", ItemsSource = rates.Select(rate => $"{rate} Hz").ToArray(), SelectedIndex = Array.IndexOf(rates, _configuration.AppSettings.OutputRateHz), HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -521,11 +518,14 @@ public sealed partial class MainWindow : Window
         void UpdatePortVisibility() => portPanel.Visibility = backend.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         backend.SelectionChanged += (_, _) => UpdatePortVisibility(); UpdatePortVisibility();
         var folder = new Button { Content = "Open data folder" };
+        var startInTray = new CheckBox { Content = "Start in tray", IsChecked = _configuration.AppSettings.StartInTray };
         folder.Click += (_, _) => { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = _dataFolder, UseShellExecute = true }); } catch (Exception ex) { ShowNotice("Data folder could not be opened: " + ex.Message, InfoBarSeverity.Warning); } };
         using var licenseStream = typeof(MotionSettings).Assembly.GetManifestResourceStream("MouseControl.GhostCursorSharp.License");
         using var licenseReader = licenseStream is null ? null : new StreamReader(licenseStream);
-        var license = new Expander { Header = "Third-party license", HorizontalAlignment = HorizontalAlignment.Stretch, Content = new TextBlock { Text = "GhostCursorSharp geometry\n\n" + (licenseReader?.ReadToEnd() ?? "See THIRD_PARTY_NOTICES.md in the repository."), TextWrapping = TextWrapping.Wrap, FontSize = 11 } };
-        var panel = new StackPanel { Spacing = 14 }; foreach (var element in new UIElement[] { model, description, range, outputRate, timing, backend, portPanel, folder, license }) panel.Children.Add(element);
+        using var originalLicenseStream = typeof(MotionSettings).Assembly.GetManifestResourceStream("MouseControl.GhostCursor.License");
+        using var originalLicenseReader = originalLicenseStream is null ? null : new StreamReader(originalLicenseStream);
+        var license = new Expander { Header = "Third-party license", HorizontalAlignment = HorizontalAlignment.Stretch, Content = new TextBlock { Text = "GhostCursorSharp geometry\n\n" + (licenseReader?.ReadToEnd() ?? "See THIRD_PARTY_NOTICES.md in the repository.") + "\n\nOriginal ghost-cursor\n\n" + originalLicenseReader?.ReadToEnd(), TextWrapping = TextWrapping.Wrap, FontSize = 11 } };
+        var panel = new StackPanel { Spacing = 14 }; foreach (var element in new UIElement[] { backend, portPanel, startInTray, outputRate, timing, range, folder, license }) panel.Children.Add(element);
         var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Settings", Content = new ScrollViewer { Content = panel, MaxHeight = 390 }, PrimaryButtonText = "Save", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
         dialog.PrimaryButtonClick += (_, args) =>
         {
@@ -534,7 +534,11 @@ public sealed partial class MainWindow : Window
         };
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
-            ReplaceProfile(Current with { Motion = Current.Motion with { Model = (MotionModel)model.SelectedItem } });
+            if ((startInTray.IsChecked == true) != _configuration.AppSettings.StartInTray)
+            {
+                _configuration = _configuration with { AppSettings = _configuration.AppSettings with { StartInTray = startInTray.IsChecked == true } };
+                MarkDirty();
+            }
             var requestedRate = rates[outputRate.SelectedIndex];
             if (requestedRate != _configuration.AppSettings.OutputRateHz)
             {
@@ -547,6 +551,11 @@ public sealed partial class MainWindow : Window
             if (kind != _configuration.AppSettings.InputBackend || selectedPort != _configuration.AppSettings.ArduinoPort)
                 SelectInputBackend(kind, selectedPort);
         }
+    }
+    internal void ApplyStartupVisibility()
+    {
+        if (!_smoke && _configuration.AppSettings.StartInTray && _bridge.TrayAvailable)
+        { _bridge.Hide(); OnHidden(); }
     }
     private void OnShown() { _hidden = false; CancelCapture(); _runtime.Invalidate(); RebuildPreview(); }
     private void OnHidden() { _hidden = true; CancelCapture(); _runtime.Invalidate(); _previewTimer.Stop(); }
@@ -591,14 +600,17 @@ public sealed partial class MainWindow : Window
             var beforeStep = Current.Motion.X;
             HorizontalNumber.Value = 1502;
             if (Math.Abs((Current.Motion.X - beforeStep) * MotionUi.MaximumSpeed - 1) > 1e-9) throw new Exception("One-unit speed increment failed.");
-            foreach (var choice in Enum.GetValues<MotionModel>())
+            if (ModelCombo.Items.Count != 2) throw new Exception("Only two motion models should be exposed.");
+            foreach (var choice in MotionUi.Models)
             {
                 ModelCombo.SelectedItem = choice;
                 if (Current.Motion.Model != choice) throw new Exception("Model selection failed.");
             }
-            ModelCombo.SelectedItem = MotionModel.Wind;
+            ModelCombo.SelectedItem = MotionModel.Classic;
+            PulseEffectCheck.IsChecked = CorrectionEffectCheck.IsChecked = false;
+            if (HumanSlider.IsEnabled || HumanNumber.IsEnabled) throw new Exception("Plain Classic should not expose ineffective strength editing.");
             PulseEffectCheck.IsChecked = CorrectionEffectCheck.IsChecked = true;
-            if (!Current.Motion.PulseOverlay || !Current.Motion.CorrectionsOverlay) throw new Exception("Effect composition failed.");
+            if (!Current.Motion.PulseOverlay || !Current.Motion.CorrectionsOverlay || !HumanSlider.IsEnabled || !HumanNumber.IsEnabled) throw new Exception("Effect composition failed.");
             Save();
             var reloaded = _store.Load();
             if (!reloaded.Success || reloaded.Configuration!.AppSettings != _configuration.AppSettings || !reloaded.Configuration.Profiles.SequenceEqual(_configuration.Profiles)) throw new Exception("Profile roundtrip failed.");
@@ -633,7 +645,7 @@ public sealed partial class MainWindow : Window
                 await SaveScreenshot(capture.Pixels, capture.Width, capture.Height, screenshot);
             }
             finally { NativeScreenshot.RestoreAfterCapture(captureHwnd); }
-            File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = true, simulation = true, synchronizedControls = true, createdProfile = true, numericEdit = true, numericButtonsHidden = true, speedRange = MotionUi.MaximumSpeed, oneUnitStep = true, availableModels = Enum.GetNames<MotionModel>(), combinedEffects = true, profileRoundtrip = true, requestedOutputRate = _runtime.RequestedOutputRateHz, offlineArduinoBlocked = true, windowsBackendRestored = true, trayAvailable = _bridge.TrayAvailable, screenshot }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = true, simulation = true, synchronizedControls = true, createdProfile = true, numericEdit = true, numericButtonsHidden = true, speedRange = MotionUi.MaximumSpeed, oneUnitStep = true, availableModels = MotionUi.Models.Select(model => model.ToString()).ToArray(), combinedEffects = true, profileRoundtrip = true, requestedOutputRate = _runtime.RequestedOutputRateHz, offlineArduinoBlocked = true, windowsBackendRestored = true, trayAvailable = _bridge.TrayAvailable, screenshot }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(output)!); File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = false, error = ex.ToString() })); }
         finally { Close(); }

@@ -30,8 +30,9 @@ an inert default. Switching, editing, or deleting profiles stops the current mot
 requires a fresh activation hold.
 
 Per-profile settings are name, color, X/Y components, Humanization, activation binding, model,
-and pulse/correction effect flags. The global toggle hotkey, input backend, Arduino port, output rate, and active profile ID are application
-settings. Enabled and pressed state are transient. Edits save after a short debounce; normal
+and pulse/correction effect flags. The global toggle hotkey, input backend, Arduino port,
+output rate, startup-in-tray preference and active profile ID are application settings.
+Enabled and pressed state are transient. Edits save after a short debounce; normal
 exit flushes pending changes. Errors are visible and preserve the previous settings document.
 
 ## Main controls
@@ -51,14 +52,15 @@ Arrow keys adjust a focused slider by one input unit/second. Numeric values are 
 double-click resets an axis slider to zero. All axis controls and the direction pad share
 one X/Y state.
 
-The footer selects **Smooth**, **Organic**, **Wind**, **Pulse**, **Corrections**, or **Bezier**. **Effects**
-opens independent pulse and lateral-correction toggles. A model's built-in effect is shown
-enabled and is not applied twice. The Humanization slider scales both model and added effects.
+The footer selects **Classic** or **Bezier**, with independent inline **Pulse** and
+**Nonlinearity** checkboxes. The Humanization slider scales the mode and selected effects.
+For Classic with both effects off, strength controls are disabled while their value is
+retained. Legacy model migration is described in [motion models](MOTION_MODELS.md).
 
-Settings contain the model selector and requested host output rate: 125, 250, 500, or 1000 Hz.
+Settings contain the requested host output rate: 125, 250, 500, or 1000 Hz, and **Start in tray**.
 The dialog also selects **Windows (SendInput)**
 or **Arduino Leonardo (USB HID)**, with an editable COM-port selector for Arduino, and opens
-the application's settings folder. Model/rate controls do not add a fourth main slider.
+the application's settings folder. Rate controls do not add a fourth main slider.
 The output rate is a scheduling target; acknowledgements and Windows scheduling can reduce
 the effective rate. Existing profile percentages are converted to the full speed range while
 preserving their commanded X/Y velocities.
@@ -120,6 +122,9 @@ synchronized.
 Minimize and the tray button hide the window when the notification icon is available.
 Hiding stops the current motion and requires a fresh hold. If tray creation fails, hiding
 is unavailable and the window remains accessible.
+The optional **Start in tray** preference applies after window initialization, only when
+the notification icon is available. Its default is off, including for older settings files.
+It does not enable movement at startup.
 
 Click or double-click the icon to show the window. Right-click opens a native menu containing:
 

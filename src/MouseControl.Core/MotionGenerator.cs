@@ -135,6 +135,9 @@ public sealed class MotionGenerator
         {
             switch (_settings.Model)
             {
+                case MotionModel.Classic:
+                    // Keep the exact straight baseline; optional effects are applied below.
+                    break;
                 case MotionModel.Smooth:
                     FilterNoise(0.08, 0.22, timeConstant: 0.10);
                     speed += h * 0.55 * _speedNoise;

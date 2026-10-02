@@ -17,7 +17,8 @@ public sealed record AppSettings(
     [property: JsonRequired] Guid ActiveProfileId,
     InputBackendKind InputBackend = InputBackendKind.Windows,
     string ArduinoPort = "",
-    int OutputRateHz = 1000);
+    int OutputRateHz = 1000,
+    bool StartInTray = false);
 
 public sealed record Profile(
     [property: JsonRequired] Guid Id,
@@ -42,7 +43,7 @@ public sealed record ProfileConfiguration(
         var id = Guid.NewGuid();
         return new(CurrentVersion,
             new(new(0x77, HotkeyModifiers.None), id), // F8
-            new[] { new Profile(id, "Default", "#60A5FA", ActivationBinding.Lmb, new()) });
+            new[] { new Profile(id, "Default", "#60A5FA", ActivationBinding.Lmb, new(Humanization: .6)) });
     }
 
     public void Validate()

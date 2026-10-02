@@ -11,18 +11,20 @@ A zero X/Y vector remains stationary.
 
 | Model | Behavior |
 | --- | --- |
-| Smooth | Slowly changing correlated speed and lateral variation. |
-| Organic | Faster, stronger correlated variation. |
-| Wind | Damped inertia responding to a changing directional push. |
-| Pulse | Smooth bursts and coasting; full strength includes brief pauses. |
-| Corrections | Slowly changing lateral arcs and speed modulation. |
+| Classic | Straight movement with a smooth onset; no base variation. |
 | Bezier | Sequential randomly curved segments with filtered velocity. |
 
-**Effects → Pulse envelope** and **Lateral corrections** can be combined with the selected
-model. For example, Wind with both effects adds bursts and side arcs to an inertial baseline.
-Pulse and Corrections already include their matching effect; selecting it again never doubles
-the effect. A full-strength pulse pause stops both components, including added corrections.
-The final output remains bounded by 2000 units/second per component.
+The footer's **Pulse** switch adds smooth bursts and coasting. **Nonlinearity** adds lateral
+arcs and speed modulation. Either or both can be used with either mode. Humanization scales
+the selected mode and effects together. For plain Classic, the strength control is disabled
+and its stored value is remembered. A full-strength pulse pause stops both components,
+including added corrections. The final output remains bounded by 2000 units/second per
+component. Detailed coefficients belong to the backend and have no additional UI controls.
+
+Legacy models remain readable by the core. On application startup, Pulse and Corrections
+map to Classic with their matching switch enabled. Smooth, Organic and Wind map to Bezier
+when strength is nonzero, or Classic at zero. Existing flags, profile metadata and commanded
+velocities are preserved. Existing Classic and Bezier profiles are unchanged.
 
 ## Parameter changes
 
@@ -37,6 +39,7 @@ segments, an injected seeded random source, direction-based anchor ordering and 
 vector derivatives. This is a continuous-motion adaptation; it does not use upstream browser
 automation or timestamp generation. Attribution and the MIT license are included in
 [third-party notices](../THIRD_PARTY_NOTICES.md) and the executable's Settings dialog.
+The [upstream comparison](UPSTREAM_REVIEW.md) records the reviewed original and port revisions.
 
 The integration grid is 200 Hz. Displacement is integrated across grid cells using the actual
 elapsed time, independently of how the output timer partitions that time. A gap exceeding

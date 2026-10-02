@@ -3,6 +3,45 @@ using MouseControl.App.Services;
 
 internal static class MotionUiChecks
 {
+    public static void SimpleModels()
+    {
+        if (!MotionUi.Models.SequenceEqual(new[] { MotionModel.Classic, MotionModel.Bezier })) throw new Exception("The UI must expose only Classic and Bezier.");
+        var source = ProfileConfiguration.CreateDefault();
+        var profiles = (from model in Enum.GetValues<MotionModel>()
+                        from strength in new[] { 0.0, .65 }
+                        select source.Profiles[0] with
+                        {
+                            Id = Guid.NewGuid(), Name = $"Saved {model} {strength}", Color = "#AA55CC", Activation = ActivationBinding.Alt,
+                            Motion = new(.6, -.5, strength, 2000, model, model == MotionModel.Wind, model == MotionModel.Organic)
+                        }).ToArray();
+        source = source with { Profiles = profiles, AppSettings = source.AppSettings with { ActiveProfileId = profiles[^1].Id, InputBackend = InputBackendKind.Arduino, ArduinoPort = "COM7", OutputRateHz = 250 } };
+        var converted = MotionUi.UseSimpleModels(source, out var changed);
+        converted.Validate();
+        if (!changed || converted.AppSettings != source.AppSettings) throw new Exception("Global settings changed during model migration.");
+        for (var index = 0; index < profiles.Length; index++)
+        {
+            var before = profiles[index]; var after = converted.Profiles[index];
+            var expected = before.Motion.Model switch
+            {
+                MotionModel.Classic or MotionModel.Bezier => before.Motion,
+                MotionModel.Pulse => before.Motion with { Model = MotionModel.Classic, PulseOverlay = true },
+                MotionModel.Corrections => before.Motion with { Model = MotionModel.Classic, CorrectionsOverlay = true },
+                _ => before.Motion with { Model = before.Motion.Humanization == 0 ? MotionModel.Classic : MotionModel.Bezier }
+            };
+            if (after != (before with { Motion = expected }) || !MotionUi.Models.Contains(after.Motion.Model)) throw new Exception("Saved model migration changed unrelated settings or exposed a legacy choice.");
+        }
+        if (!ReferenceEquals(MotionUi.UseSimpleModels(converted, out changed), converted) || changed) throw new Exception("Model conversion is not idempotent.");
+        var path = Path.Combine(Path.GetTempPath(), "MouseControl-model-migration-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var store = new ProfileStore(path);
+            if (!store.Save(converted).Success) throw new Exception("Simplified profiles could not be saved.");
+            var restored = store.Load();
+            if (!restored.Success || restored.Configuration!.AppSettings != converted.AppSettings || !restored.Configuration.Profiles.SequenceEqual(converted.Profiles)) throw new Exception("Simplified profiles lost data in JSON roundtrip.");
+        }
+        finally { File.Delete(path); File.Delete(path + ".lock"); }
+    }
+
     public static void PreserveProfiles()
     {
         var old = ProfileConfiguration.CreateDefault();

@@ -8,8 +8,7 @@ and .NET 10.
 - Three sliders with numeric fields: signed vertical and horizontal components, and
   Humanization strength.
 - A synchronized square direction pad and local motion preview.
-- Smooth, Organic, Wind, Pulse, Corrections, and Bezier motion models, with combinable pulse
-  and lateral-correction effects.
+- Classic and Bezier motion modes, with independent Pulse and Nonlinearity switches.
 - Axis speeds from −2000 to +2000 relative input units/second, with one-unit increments.
 - Requested host output rates of 125, 250, 500, or 1000 Hz.
 - Hold-to-activate bindings: LMB, RMB, LMB + RMB, MMB, Alt, or Shift.
@@ -17,7 +16,7 @@ and .NET 10.
 - Profile tabs with editable names and colors, duplication, deletion, and Undo.
 - Desktop Acrylic, Windows light/dark appearance, and system accent colors.
 - A notification-area menu for showing the window, enabling motion, selecting a profile,
-  and exiting.
+  and exiting, plus optional startup in the tray.
 - Windows relative input or Arduino Leonardo USB HID output, with an Arduino-only
   Online/Offline indicator and reconnection while offline.
 
@@ -49,9 +48,10 @@ to the user's runtime cache at launch. Settings are stored separately.
 
 1. Set horizontal and vertical direction with the sliders, numeric fields, or direction pad.
    Negative X moves left, positive X right, negative Y up, and positive Y down.
-2. Set Humanization from 0 to 100%. Choose a model in the footer and use **Effects** to
-   combine pulse and lateral corrections. The preview draws locally and fits its trajectory
-   to the pad; it does not move the system cursor.
+2. Choose **Classic** for straight movement or **Bezier** for curved segments. Enable
+   **Pulse** and/or **Nonlinearity** as needed. Humanization sets their shared strength from
+   0 to 100%; it is unavailable for Classic with both effects off. The preview draws locally
+   and fits its trajectory to the pad; it does not move the system cursor.
 3. Choose an activation binding and enable motion with the switch or global toggle key.
 4. Switch to another application, release the activation binding, then hold it to move.
 
@@ -62,6 +62,10 @@ press. Releasing the binding stops movement.
 Axis values are commanded speeds in relative input units/second. The range is ±2000 per
 axis, with one-unit slider and numeric increments. Existing profiles keep their commanded
 speeds when converted from the older percentage controls.
+Older Pulse/Corrections profiles become Classic with the corresponding switch enabled.
+Older Smooth/Organic/Wind profiles become Bezier when their strength is nonzero, or Classic
+at zero strength. Names, colors, activation bindings, direction, strength and global settings
+are retained. Existing Classic and Bezier selections are unchanged.
 
 **Settings → Requested output rate** selects the host scheduling target, defaulting to
 1000 Hz. This is separate from motion speed and USB polling. Windows scheduling and serial
@@ -75,6 +79,8 @@ Click the toggle-key button to capture a new hotkey. Escape cancels; its own bin
 available from the button's context menu. A failed registration
 keeps the previous binding. Minimize or use the tray button to hide the window; click the
 tray icon to restore it. The window close button and tray **Exit** stop the application.
+**Settings → Start in tray** remembers the startup preference. If the notification icon
+cannot be created, the window stays visible. Startup always leaves movement disabled.
 
 Settings are saved under `%LOCALAPPDATA%\MouseControl`. Invalid existing settings are
 preserved, and save/load errors appear in the window.
@@ -115,6 +121,7 @@ CLI after installing those dependencies:
 
 - [UI and interaction specification](docs/UI_SPEC.md)
 - [Motion models and timing](docs/MOTION_MODELS.md)
+- [Ghost Cursor upstream comparison](docs/UPSTREAM_REVIEW.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Visual concepts](docs/concepts/README.md)
 - [Core contracts](src/MouseControl.Core/README.md)

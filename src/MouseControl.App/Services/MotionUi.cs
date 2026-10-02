@@ -5,6 +5,7 @@ namespace MouseControl.App.Services;
 internal static class MotionUi
 {
     public const double MaximumSpeed = 2000;
+    public static IReadOnlyList<MotionModel> Models { get; } = new[] { MotionModel.Classic, MotionModel.Bezier };
 
     // Older profiles stored percentages of an editable rate. Keep their commanded
     // velocities while exposing the full range with one-unit numeric increments.
@@ -27,14 +28,24 @@ internal static class MotionUi
         };
     }
 
-    public static string Describe(MotionModel model) => model.ToString() switch
+    public static ProfileConfiguration UseSimpleModels(ProfileConfiguration source, out bool changed)
     {
-        "Smooth" => "Slow, smooth changes in speed and lateral direction.",
-        "Organic" => "Stronger, faster variation in speed and lateral direction.",
-        "Wind" => "Damped inertia with a slowly changing directional push.",
-        "Pulse" => "Smooth bursts and coasting, with brief pauses at full strength.",
-        "Corrections" => "Slow lateral arcs with changing speed and direction.",
-        "Bezier" => "Random curved segments with smooth changes in velocity.",
-        _ => "Procedural movement variation."
-    };
+        source.Validate();
+        var profiles = source.Profiles.Select(profile => profile with
+        {
+            Motion = profile.Motion.Model switch
+            {
+                MotionModel.Classic or MotionModel.Bezier => profile.Motion,
+                MotionModel.Pulse => profile.Motion with { Model = MotionModel.Classic, PulseOverlay = true },
+                MotionModel.Corrections => profile.Motion with { Model = MotionModel.Classic, CorrectionsOverlay = true },
+                _ => profile.Motion with { Model = profile.Motion.Humanization == 0 ? MotionModel.Classic : MotionModel.Bezier }
+            }
+        }).ToArray();
+        changed = !profiles.SequenceEqual(source.Profiles);
+        return changed ? source with { Profiles = profiles } : source;
+    }
+
+    public static string Describe(MotionModel model) => model == MotionModel.Classic
+        ? "Straight movement. Pulse and Nonlinearity are optional."
+        : "Random curved segments with smooth changes in velocity.";
 }

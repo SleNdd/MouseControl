@@ -24,6 +24,7 @@ public partial class App : Application
         {
             _window = new MainWindow(smoke);
             _window.Activate();
+            _window.ApplyStartupVisibility();
         }
         catch (Exception ex)
         {

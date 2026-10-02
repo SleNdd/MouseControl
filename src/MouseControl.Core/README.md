@@ -1,9 +1,10 @@
 # MouseControl.Core
 
 Managed .NET 10 motion, activation, and configuration code. Native input submission belongs
-to the application layer. `Smooth`, `Organic`, `Wind`, `Pulse`, `Corrections`, and `Bezier` provide
-continuous synthetic motion variation. Model names `Smooth` and `Organic` retain their
-existing persisted enum values.
+to the application layer. New settings default to `Classic`, an exact straight baseline with
+optional effects. `Bezier` provides continuous synthetic motion variation. Legacy models
+`Smooth`, `Organic`, `Wind`, `Pulse`, and `Corrections` remain supported for persisted profiles.
+Their enum values 0–4 and `Bezier` value 5 are retained; `Classic` is appended as value 6.
 
 ## Runtime contract
 
@@ -18,6 +19,9 @@ existing persisted enum values.
   activates its effect alongside the selected model. Selecting the matching base model
   already activates that effect; setting its flag does not apply it twice. Nonzero commanded
   components retain their sign; a component commanded to zero may vary laterally.
+  The application's Nonlinearity option uses `CorrectionsOverlay`; it adds no JSON field.
+  Classic without either effect matches the exact Humanization-zero baseline at every
+  strength and seed. Selected effects still use Humanization to scale their contribution.
 - Nonpositive dt produces zero. Nonfinite dt throws. A dt above 100 ms resets onset and
   returns zero; the caller must not accumulate catch-up time. `ResetSession()` resets the
   seeded path. `UpdateSettings()` validates and resets, leaving prior state intact on failure.
@@ -42,6 +46,7 @@ At Humanization 1, the model coefficients before component clamping are:
 
 | Model | Speed coefficient | Lateral coefficient | Timing |
 | --- | --- | --- | --- |
+| Classic | `1` | `0` | Exact straight onset baseline; no random target updates |
 | Smooth | `1 + 0.55*q` | `0.45*r` | Noise targets held 80–220 ms; exponential response with 100 ms time constant |
 | Organic | `1 + 0.85*q` | `0.80*r` | Targets held 35–150 ms; 45 ms response, noise slope capped at 10/second |
 | Wind | `1 + 0.75*q` | `0.90*r` | Targets held 150–500 ms; damped inertia `q'' = 36*(target-q) - 10*q'` |
@@ -92,7 +97,8 @@ Version 1 is a single camelCase JSON document:
     "activeProfileId": "6d3433a2-a5dc-4596-b117-9cb56a18721e",
     "inputBackend": "Windows",
     "arduinoPort": "",
-    "outputRateHz": 1000
+    "outputRateHz": 1000,
+    "startInTray": false
   },
   "profiles": [
     {
@@ -102,7 +108,7 @@ Version 1 is a single camelCase JSON document:
       "activation": "Lmb",
       "motion": {
         "x": 0, "y": 0, "humanization": 0,
-        "maxComponentRate": 150, "model": "Smooth",
+        "maxComponentRate": 150, "model": "Classic",
         "pulseOverlay": false, "correctionsOverlay": false
       }
     }
@@ -115,8 +121,10 @@ reading older files and default to `Windows` and an empty string. Backend values
 or `Arduino`; an Arduino selection requires a valid COM port name. Persisting a selection does
 not itself open a connection or enable motion.
 `outputRateHz` is optional in older files, defaults to 1000, and must be 125, 250, 500, or 1000.
+`startInTray` is optional in older files and defaults to false. It is a window startup
+preference; enabled/armed state remains transient and always starts disabled.
 `pulseOverlay` and `correctionsOverlay` are optional when reading older motion settings and
-default to false. All six model names and both overlay flags roundtrip in version 1.
+default to false. All seven model names and both overlay flags roundtrip in version 1.
 
 IDs are nonempty and unique; names may repeat. At least one profile
 must exist, and the active ID must refer to one. Colors use `#RRGGBB`. Activation values are
@@ -141,4 +149,5 @@ dotnet run --project tests/MouseControl.Core.Tests/MouseControl.Core.Tests.cspro
 The harness uses isolated temporary directories and exits nonzero on a failed assertion.
 Motion checks cover all models, effect combinations, seeded reset, fixed-grid partition
 invariance, bounds/sign preservation, exact zero, stall reset, nonperiodic refresh timing,
-command-vector scaling, smooth onset, full-strength pauses, and optional-field compatibility.
+command-vector scaling, smooth onset, Classic's exact baseline at all strengths, independent
+Classic effects, full-strength pauses, and optional-field compatibility.

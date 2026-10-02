@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="ThirdParty/LICENSE.GhostCursorSharp.txt" LogicalName="MouseControl.GhostCursorSharp.License" />
+    <EmbeddedResource Include="ThirdParty/LICENSE.GhostCursor.txt" LogicalName="MouseControl.GhostCursor.License" />
   </ItemGroup>
 </Project>

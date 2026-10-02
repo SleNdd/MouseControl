@@ -6,6 +6,8 @@ var tests = new (string Name, Action Run)[]
 {
     ("seed reproducibility and reset", SeedReproducibility),
     ("zero humanization is seed/model independent", DeterministicBaseline),
+    ("Classic is the exact straight baseline at every strength", ClassicBaseline),
+    ("Classic optional effects act independently and pause together", ClassicEffects),
     ("timer partition invariance", TimerPartition),
     ("zero vector and component bounds", MotionBounds),
     ("smooth onset and correlated lateral variation", MotionShape),
@@ -25,7 +27,8 @@ var tests = new (string Name, Action Run)[]
     ("all models and overlays persist with optional compatibility", ModelPersistence),
     ("parameter refreshes evolve on nonperiodic bounded schedules", NonperiodicCadence),
     ("combined effects preserve motion invariants and pause together", CombinedEffects),
-    ("Bezier signed geometry and segment stitching", BezierGeometry)
+    ("Bezier signed geometry and segment stitching", BezierGeometry),
+    ("embedded third-party license notices", EmbeddedLicenses)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -41,6 +44,17 @@ static void Assert(bool condition, string message)
     if (!condition) throw new InvalidOperationException(message);
 }
 
+static void EmbeddedLicenses()
+{
+    foreach (var resource in new[] { "MouseControl.GhostCursorSharp.License", "MouseControl.GhostCursor.License" })
+    {
+        using var stream = typeof(MotionGenerator).Assembly.GetManifestResourceStream(resource);
+        Assert(stream is not null, "Embedded attribution is missing: " + resource);
+        using var reader = new StreamReader(stream!);
+        Assert(reader.ReadToEnd().Contains("MIT License", StringComparison.Ordinal), "Embedded license text is incomplete.");
+    }
+}
+
 static void Near(double actual, double expected, double tolerance = 1e-9) =>
     Assert(Math.Abs(actual - expected) <= tolerance, $"Expected {expected}, got {actual}.");
 
@@ -54,7 +68,7 @@ static void SeedReproducibility()
         var c = new MotionGenerator(settings, 43);
         var first = a.Step(.016);
         Assert(first == b.Step(.016), "Same seeds differ.");
-        Assert(first != c.Step(.016), "Different seeds should vary.");
+        Assert((first != c.Step(.016)) == (model != MotionModel.Classic), "Unexpected seed dependence.");
         for (var i = 0; i < 300; i++) Assert(a.Step(.013) == b.Step(.013), "Seed path differs.");
         a.ResetSession();
         Assert(a.Step(.016) == first, "Reset did not reproduce fresh session.");
@@ -80,6 +94,55 @@ static MotionDelta Integrate(MotionGenerator generator, int count, double dt)
     double dx = 0, dy = 0;
     for (var i = 0; i < count; i++) { var delta = generator.Step(dt); dx += delta.Dx; dy += delta.Dy; }
     return new(dx, dy);
+}
+
+static void ClassicBaseline()
+{
+    Assert(new MotionSettings().Model == MotionModel.Classic, "New settings do not default to Classic.");
+    foreach (var h in new[] { 0.0, .1, .5, 1.0 })
+    foreach (var seed in new[] { -19, 0, 42, int.MaxValue })
+    foreach (var vector in new[] { (.6, -.3), (-1.0, 1.0), (0.0, -.5), (0.0, 0.0) })
+    {
+        var settings = new MotionSettings(vector.Item1, vector.Item2, h, 2000, MotionModel.Classic);
+        var classic = new MotionGenerator(settings, seed);
+        var baseline = new MotionGenerator(settings with { Humanization = 0, Model = MotionModel.Smooth }, 3);
+        for (var i = 0; i < 500; i++)
+        {
+            var dt = i % 3 == 0 ? .001 : i % 3 == 1 ? .013 : .086;
+            Assert(classic.Step(dt) == baseline.Step(dt), "Classic changed the exact legacy baseline.");
+        }
+        classic.ResetSession(); baseline.ResetSession();
+        Assert(classic.Step(.017) == baseline.Step(.017), "Classic reset changed the baseline.");
+        classic.UpdateSettings(settings); baseline.ResetSession();
+        Assert(classic.Step(.017) == baseline.Step(.017), "Classic settings update changed the baseline.");
+    }
+}
+
+static void ClassicEffects()
+{
+    foreach (var pulse in new[] { false, true })
+    foreach (var corrections in new[] { false, true })
+    {
+        var settings = new MotionSettings(.25, 0, 1, 150, MotionModel.Classic, pulse, corrections);
+        var generator = new MotionGenerator(settings, 73);
+        var baseline = new MotionGenerator(settings with { PulseOverlay = false, CorrectionsOverlay = false }, 73);
+        var legacyCorrections = new MotionGenerator(settings with { Model = MotionModel.Corrections }, 73);
+        var partial = new MotionGenerator(settings with { Humanization = .5 }, 73);
+        var changed = false; var lateral = false; var paused = 0;
+        for (var i = 0; i < 3000; i++)
+        {
+            var delta = generator.Step(.005);
+            changed |= delta != baseline.Step(.005);
+            lateral |= Math.Abs(delta.Dy) > .0001;
+            if (i > 200 && delta == default) paused++;
+            if (!corrections) Assert(delta.Dy == 0, "Pulse alone bent the Classic baseline.");
+            else Assert(delta == legacyCorrections.Step(.005), "Classic Nonlinearity changed the legacy Corrections effect.");
+            Assert(partial.Step(.005).Dx > 0, "Partial-strength Classic effects stopped forward motion.");
+        }
+        Assert(changed == (pulse || corrections), "Classic effect selection did not control variation.");
+        Assert(lateral == corrections, "Classic Nonlinearity did not control lateral variation.");
+        Assert(pulse ? paused > 100 : paused == 0, "Classic full-strength Pulse pause behavior changed.");
+    }
 }
 
 static void TimerPartition()
@@ -144,7 +207,7 @@ static void MotionShape()
                 $"{model} motion changed abruptly at sample {i}: dx change={Math.Abs(delta.Dx - last.Dx)}, dy change={Math.Abs(delta.Dy - last.Dy)}.");
             last = delta;
         }
-        Assert(lateral, "Humanization produced no lateral variation.");
+        Assert(lateral == (model != MotionModel.Classic), "Unexpected base-model lateral variation.");
     }
 }
 
@@ -340,12 +403,14 @@ static void BackendSettingsCompatibility() => WithStore((store, path) =>
     var document = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
     document["appSettings"]!.AsObject().Remove("inputBackend");
     document["appSettings"]!.AsObject().Remove("arduinoPort");
+    document["appSettings"]!.AsObject().Remove("startInTray");
     File.WriteAllText(path, document.ToJsonString());
     var old = store.Load();
     Assert(old.Success && old.Configuration!.AppSettings.InputBackend == InputBackendKind.Windows &&
-        old.Configuration.AppSettings.ArduinoPort == "", "Old version-one settings lost backend defaults.");
+        old.Configuration.AppSettings.ArduinoPort == "" && !old.Configuration.AppSettings.StartInTray,
+        "Old version-one settings lost backend or tray defaults.");
     var arduino = configuration with { AppSettings = configuration.AppSettings with
-        { InputBackend = InputBackendKind.Arduino, ArduinoPort = "COM9" } };
+        { InputBackend = InputBackendKind.Arduino, ArduinoPort = "COM9", StartInTray = true } };
     Assert(store.Save(arduino).Success && store.Load().Configuration!.AppSettings == arduino.AppSettings,
         "Arduino selection did not roundtrip.");
     var original = File.ReadAllBytes(path);
@@ -400,6 +465,7 @@ static void ModelStrength()
     var paths = new Dictionary<MotionModel, MotionDelta[]>();
     foreach (var model in Enum.GetValues<MotionModel>())
     {
+        if (model == MotionModel.Classic) continue; // Exact baseline is covered separately.
         const double nominal = .25 * 150;
         const double dt = .005;
         var generator = new MotionGenerator(new(.25, 0, 1, 150, model), 73);
@@ -439,7 +505,9 @@ static void ModelStrength()
 
 static void ModelPersistence() => WithStore((store, path) =>
 {
-    Assert((int)MotionModel.Smooth == 0 && (int)MotionModel.Organic == 1, "Existing enum identities changed.");
+    Assert((int)MotionModel.Smooth == 0 && (int)MotionModel.Organic == 1 && (int)MotionModel.Wind == 2 &&
+        (int)MotionModel.Pulse == 3 && (int)MotionModel.Corrections == 4 && (int)MotionModel.Bezier == 5 &&
+        (int)MotionModel.Classic == 6, "Existing enum identities changed or Classic was not appended.");
     var config = Sample();
     foreach (var model in Enum.GetValues<MotionModel>())
     foreach (var pulse in new[] { false, true })
@@ -471,6 +539,7 @@ static void NonperiodicCadence()
 {
     foreach (var model in Enum.GetValues<MotionModel>())
     {
+        if (model == MotionModel.Classic) continue; // Straight Classic has no random refresh schedule.
         var generator = new MotionGenerator(new(.25, 0, 1, Model: model), 73);
         if (model == MotionModel.Bezier)
         {
@@ -573,7 +642,7 @@ static void CombinedEffects()
             { PulseOverlay = model == MotionModel.Pulse, CorrectionsOverlay = model == MotionModel.Corrections }, 77);
         for (var i = 0; i < 1000; i++) Assert(plain.Step(.01) == duplicate.Step(.01), "Matching overlay applied twice.");
     }
-    foreach (var model in new[] { MotionModel.Smooth, MotionModel.Organic, MotionModel.Wind, MotionModel.Bezier })
+    foreach (var model in new[] { MotionModel.Smooth, MotionModel.Organic, MotionModel.Wind, MotionModel.Bezier, MotionModel.Classic })
     {
         var settings = new MotionSettings(.23, .11, 1, Model: model);
         var plain = new MotionGenerator(settings, 17);

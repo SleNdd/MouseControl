@@ -27,7 +27,8 @@ var tests = new (string Name, Action Run)[]
     ("Arduino stop failure and unplug disable without fallback", BackendChecks.Disconnect),
     ("obsolete reconnect cannot change current selection", BackendChecks.ReconnectIsolation),
     ("simulation cannot open serial", BackendChecks.SimulationIsolation),
-    ("speed-unit migration preserves saved profile velocities", MotionUiChecks.PreserveProfiles)
+    ("speed-unit migration preserves saved profile velocities", MotionUiChecks.PreserveProfiles),
+    ("two-model migration preserves metadata, effects and global settings", MotionUiChecks.SimpleModels)
 };
 var failures = 0;
 foreach (var test in tests)

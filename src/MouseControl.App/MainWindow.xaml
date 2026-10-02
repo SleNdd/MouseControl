@@ -64,17 +64,8 @@
     <Grid Grid.Row="4" Margin="22,4,22,10">
       <StackPanel Orientation="Horizontal" Spacing="14">
         <ComboBox x:Name="ModelCombo" MinWidth="126" FontSize="11" MinHeight="28" SelectionChanged="Model_Changed" AutomationProperties.Name="Humanization algorithm"/>
-        <Button x:Name="EffectsButton" Content="Effects" MinHeight="28" FontSize="11" AutomationProperties.Name="Combine humanization effects">
-          <Button.Flyout>
-            <Flyout>
-              <StackPanel Width="230" Spacing="8">
-                <CheckBox x:Name="PulseEffectCheck" Content="Pulse envelope" Checked="Effects_Changed" Unchecked="Effects_Changed"/>
-                <CheckBox x:Name="CorrectionEffectCheck" Content="Lateral corrections" Checked="Effects_Changed" Unchecked="Effects_Changed"/>
-                <TextBlock Text="Effects combine with the selected model and use the Humanization strength." TextWrapping="Wrap" FontSize="12" Opacity="0.7"/>
-              </StackPanel>
-            </Flyout>
-          </Button.Flyout>
-        </Button>
+        <CheckBox x:Name="PulseEffectCheck" Content="Pulse" MinWidth="0" MinHeight="28" FontSize="11" Checked="Effects_Changed" Unchecked="Effects_Changed" ToolTipService.ToolTip="Vary movement in smooth bursts. Uses Humanization strength."/>
+        <CheckBox x:Name="CorrectionEffectCheck" Content="Nonlinearity" MinWidth="0" MinHeight="28" FontSize="11" Checked="Effects_Changed" Unchecked="Effects_Changed" ToolTipService.ToolTip="Add changes in direction and speed. Uses Humanization strength."/>
         <StackPanel x:Name="ArduinoStatus" Orientation="Horizontal" Spacing="6" Visibility="Collapsed" VerticalAlignment="Center">
           <Ellipse x:Name="ArduinoLamp" Width="7" Height="7" VerticalAlignment="Center"/>
           <TextBlock x:Name="ArduinoStatusText" Text="Offline" FontSize="11"/>

@@ -5,3 +5,5 @@
 artifacts/
 *.user
 *.suo
+/MouseControl.exe
+/MouseControl.exe.sha256
