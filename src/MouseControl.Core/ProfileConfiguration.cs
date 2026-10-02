@@ -16,7 +16,8 @@ public sealed record AppSettings(
     [property: JsonRequired] GlobalHotkey ToggleHotkey,
     [property: JsonRequired] Guid ActiveProfileId,
     InputBackendKind InputBackend = InputBackendKind.Windows,
-    string ArduinoPort = "");
+    string ArduinoPort = "",
+    int OutputRateHz = 1000);
 
 public sealed record Profile(
     [property: JsonRequired] Guid Id,
@@ -54,6 +55,8 @@ public sealed record ProfileConfiguration(
             throw new ArgumentException("Toggle hotkey must be a Windows virtual-key code from 1 to 254.");
         if (!Enum.IsDefined(AppSettings.InputBackend))
             throw new ArgumentException("Input backend is invalid.");
+        if (!IsSupportedOutputRate(AppSettings.OutputRateHz))
+            throw new ArgumentException("Output rate must be 125, 250, 500, or 1000 Hz.");
         if (AppSettings.ArduinoPort is null || (AppSettings.ArduinoPort.Length != 0 && !IsArduinoPortName(AppSettings.ArduinoPort)))
             throw new ArgumentException("Arduino port must be a COM port name.");
         if (AppSettings.InputBackend == InputBackendKind.Arduino && AppSettings.ArduinoPort.Length == 0)
@@ -82,6 +85,8 @@ public sealed record ProfileConfiguration(
         if (!ids.Contains(AppSettings.ActiveProfileId))
             throw new ArgumentException("The active profile must refer to an existing profile identifier.");
     }
+
+    public static bool IsSupportedOutputRate(int rate) => rate is 125 or 250 or 500 or 1000;
 
     public static bool IsArduinoPortName(string? port) => port is { Length: >= 4 and <= 8 } &&
         port.StartsWith("COM", StringComparison.OrdinalIgnoreCase) &&

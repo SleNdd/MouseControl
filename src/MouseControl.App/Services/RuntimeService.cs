@@ -19,6 +19,8 @@ public sealed class RuntimeService : IDisposable
     private readonly ActivationGate _gate = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _worker;
+    private readonly Func<IOutputScheduler> _schedulerFactory;
+    private int _requestedOutputRateHz;
     private MotionSettings _settings = new();
     private MotionGenerator _motion = new(new(), 0);
     private ActivationBinding _binding;
@@ -31,8 +33,9 @@ public sealed class RuntimeService : IDisposable
 
     public RuntimeService(bool simulation = false, Action<int, int>? simulatedOutput = null,
         Func<ActivationBinding, bool>? heldProvider = null, Func<bool>? ownForegroundProvider = null,
-        Func<int>? seedProvider = null)
-        : this(simulation, simulatedOutput, heldProvider, ownForegroundProvider, null, seedProvider)
+        Func<int>? seedProvider = null, int outputRateHz = 1000)
+        : this(simulation, simulatedOutput, heldProvider, ownForegroundProvider, null, seedProvider,
+            outputRateHz: outputRateHz)
     {
     }
 
@@ -40,8 +43,10 @@ public sealed class RuntimeService : IDisposable
     internal RuntimeService(bool simulation, Action<int, int>? simulatedOutput,
         Func<ActivationBinding, bool>? heldProvider, Func<bool>? ownForegroundProvider,
         Func<int, int, uint>? inputSubmitter, Func<int>? seedProvider = null,
-        Func<string, IInputBackend>? arduinoFactory = null)
+        Func<string, IInputBackend>? arduinoFactory = null, int outputRateHz = 1000,
+        Func<IOutputScheduler>? schedulerFactory = null)
     {
+        ValidateOutputRate(outputRateHz);
         _simulation = simulation;
         _heldProvider = heldProvider ?? IsHeld;
         _ownForegroundProvider = ownForegroundProvider ?? Native.OwnForeground;
@@ -51,7 +56,10 @@ public sealed class RuntimeService : IDisposable
         _arduinoFactory = arduinoFactory ?? ArduinoInputBackend.Connect;
         _backend = _windowsFactory();
         _seedProvider = seedProvider ?? Random.Shared.Next;
-        _worker = Task.Run(RunAsync);
+        _requestedOutputRateHz = outputRateHz;
+        _schedulerFactory = schedulerFactory ?? (() => new OutputScheduler());
+        // One owning thread blocks on the timer, so it never queues asynchronous output callbacks.
+        _worker = Task.Factory.StartNew(Run, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
     public event Action<string>? StatusChanged;
@@ -61,6 +69,30 @@ public sealed class RuntimeService : IDisposable
     public InputBackendKind BackendKind { get { lock (_sync) return _backend.Kind; } }
     public string BackendPort { get { lock (_sync) return _backend.Port; } }
     public bool BackendConnected { get { lock (_sync) return !_disposed && _backend.Connected; } }
+    public int RequestedOutputRateHz { get { lock (_sync) return _requestedOutputRateHz; } }
+
+    /// <summary>Changes the requested host cadence, disabling motion and requiring a fresh hold.</summary>
+    public void SetOutputRateHz(int rateHz)
+    {
+        string? changed;
+        lock (_sync)
+        {
+            if (_disposed) return;
+            ValidateOutputRate(rateHz);
+            if (_requestedOutputRateHz == rateHz) return;
+            _gate.SetEnabled(false);
+            var stopError = StopAndClearMotion();
+            _requestedOutputRateHz = rateHz;
+            changed = SetStatus(stopError ?? "Disabled");
+        }
+        Notify(changed);
+    }
+
+    private static void ValidateOutputRate(int rateHz)
+    {
+        if (rateHz is not (125 or 250 or 500 or 1000))
+            throw new ArgumentOutOfRangeException(nameof(rateHz), "Choose 125, 250, 500 or 1000 Hz.");
+    }
 
     /// <summary>Explicitly connects the selected backend, leaving motion disabled on every attempt.</summary>
     public bool SetBackend(InputBackendKind kind, string? port, out string error) => ChangeBackend(kind, port, connect: true, out error);
@@ -195,6 +227,7 @@ public sealed class RuntimeService : IDisposable
 
     public void Dispose()
     {
+        var transitioned = false;
         lock (_sync)
         {
             if (!_disposed)
@@ -206,22 +239,27 @@ public sealed class RuntimeService : IDisposable
                 _pendingBackendChange = true;
                 _status = "Stopped";
                 _stop.Cancel();
+                transitioned = true;
             }
         }
-        Notify("Stopped");
+        // Reentrant/repeated disposal still joins, but cannot recursively publish Stopped.
+        if (transitioned) Notify("Stopped");
         // A worker callback cannot join itself; its disposed flag prevents further submission.
         if (!ReferenceEquals(s_workerOwner, this)) _worker.GetAwaiter().GetResult();
         GC.SuppressFinalize(this);
     }
 
-    private async Task RunAsync()
+    private void Run()
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(8));
         var last = Stopwatch.GetTimestamp();
         try
         {
-            while (await timer.WaitForNextTickAsync(_stop.Token).ConfigureAwait(false))
+            using var scheduler = _schedulerFactory();
+            while (!_stop.IsCancellationRequested)
             {
+                int rate;
+                lock (_sync) rate = _requestedOutputRateHz;
+                scheduler.WaitForNextTick(rate, _stop.Token);
                 var now = Stopwatch.GetTimestamp();
                 var dt = Stopwatch.GetElapsedTime(last, now).TotalSeconds;
                 last = now;

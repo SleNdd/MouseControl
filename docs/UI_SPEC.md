@@ -1,6 +1,6 @@
 # MouseControl: UI and interaction specification
 
-Author: **SleNdd**. Date: **2026-10-02**.
+Author: **SleNdd**. Date: **2026-10-03**.
 
 ## Window and appearance
 
@@ -30,7 +30,7 @@ an inert default. Switching, editing, or deleting profiles stops the current mot
 requires a fresh activation hold.
 
 Per-profile settings are name, color, X/Y components, Humanization, activation binding, model,
-and maximum component rate. The global toggle hotkey, input backend, Arduino port, and active profile ID are application
+and pulse/correction effect flags. The global toggle hotkey, input backend, Arduino port, output rate, and active profile ID are application
 settings. Enabled and pressed state are transient. Edits save after a short debounce; normal
 exit flushes pending changes. Errors are visible and preserve the previous settings document.
 
@@ -38,20 +38,30 @@ exit flushes pending changes. Errors are visible and preserve the previous setti
 
 Exactly three sliders have matching editable numeric fields:
 
+Numeric fields omit spin buttons and the inline clear button. Typing and keyboard
+adjustments remain available.
+
 | Label | Range | Meaning |
 | --- | --- | --- |
-| Vertical | −100 to +100 | Up to down; zero is stationary on Y. |
-| Horizontal | −100 to +100 | Left to right; zero is stationary on X. |
+| Vertical | −2000 to +2000 units/s | Up to down; zero is the commanded Y baseline. |
+| Horizontal | −2000 to +2000 units/s | Left to right; zero is the commanded X baseline. |
 | Humanization | 0 to 100% | Strength of model variation; zero is the deterministic baseline. |
 
-Arrow keys adjust a focused slider. Numeric values are bounded by the same ranges. A
+Arrow keys adjust a focused slider by one input unit/second. Numeric values are bounded by the same ranges. A
 double-click resets an axis slider to zero. All axis controls and the direction pad share
 one X/Y state.
 
-Settings contain the **Smooth/Organic** selector and maximum component rate. The UI rate
-range is 1–1000 relative input units/second. The dialog also selects **Windows (SendInput)**
+The footer selects **Smooth**, **Organic**, **Wind**, **Pulse**, **Corrections**, or **Bezier**. **Effects**
+opens independent pulse and lateral-correction toggles. A model's built-in effect is shown
+enabled and is not applied twice. The Humanization slider scales both model and added effects.
+
+Settings contain the model selector and requested host output rate: 125, 250, 500, or 1000 Hz.
+The dialog also selects **Windows (SendInput)**
 or **Arduino Leonardo (USB HID)**, with an editable COM-port selector for Arduino, and opens
 the application's settings folder. Model/rate controls do not add a fourth main slider.
+The output rate is a scheduling target; acknowledgements and Windows scheduling can reduce
+the effective rate. Existing profile percentages are converted to the full speed range while
+preserving their commanded X/Y velocities.
 
 The Arduino-only footer indicator is green **Online** after firmware identification and red
 **Offline** while disconnected. Offline discovery checks only the selected port every two
@@ -73,11 +83,11 @@ handleY = top + (y + 1) * L / 2
 
 The usable bounds include a margin for the handle radius. Dragging updates both axes.
 Double-clicking the pad or pressing Home with pad focus resets both to zero. Arrow keys
-change a component by 0.01; Ctrl+arrow changes it by 0.1.
+change a speed by one unit/second; Ctrl+arrow changes it by ten.
 
 The handle sets a movement component, rather than a screen destination. A separate marker
-and dashed trace show the local preview. Its tooltip states a 1.5-second window and 0.8 canvas
-pixels per relative input unit. The drawing is clipped to the pad; it never submits system
+and dashed trace show the local preview. Its tooltip states a 1.5-second window and the
+current fitted scale. The whole trajectory is scaled to fit the pad; it never submits system
 input. The preview button pauses/resumes animation. A zero vector remains stationary.
 
 ## Activation and hotkey

@@ -3,8 +3,8 @@
 Author: **SleNdd**.
 
 This sketch receives relative cursor commands from MouseControl over the Leonardo's USB
-serial port and submits them through Arduino's standard `Mouse` library. It uses the board's
-normal USB identity. It sends no clicks, wheel input, or keyboard input. Movement occurs only
+serial port and submits them through Arduino's standard `Mouse` library. The default build uses
+the board's normal USB identity. It sends no clicks, wheel input, or keyboard input. Movement occurs only
 when a valid MOVE command arrives; it does not continue movement on its own.
 
 ## Install with Arduino IDE
@@ -84,3 +84,21 @@ The pure `Protocol.h` state machine also has checks under `.checks`. AVR compila
 physical USB operation require separate verification.
 
 Arduino reference: [Mouse library](https://docs.arduino.cc/language-reference/en/functions/usb/Mouse/).
+
+## Build-time USB fields
+
+`scripts/build-firmware.ps1` compiles the sketch without uploading it. Its optional
+`UsbVendorId`, `UsbProductId`, `UsbManufacturer`, and `UsbProductName` parameters override
+the sketch's USB descriptors. Without overrides, the Arduino board package defaults apply.
+`ArduinoCli`, `ConfigFile`, and `OutputDirectory` select the tool and output locations.
+The script rebuilds the core in an isolated `.build` directory to apply descriptor changes
+without reusing a previously compiled core.
+
+From the repository root, with Arduino CLI and the dependencies above installed:
+
+```powershell
+.\scripts\build-firmware.ps1
+```
+
+These fields affect the operating system's reported device description. They do not change
+the bootloader descriptors, serial protocol, or the visibility of USB and COM interfaces.

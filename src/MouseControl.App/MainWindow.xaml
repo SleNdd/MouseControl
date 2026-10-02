@@ -15,25 +15,25 @@
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="236"/></Grid.ColumnDefinitions>
       <StackPanel Spacing="16" VerticalAlignment="Center">
         <StackPanel Spacing="2">
-          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="84"/></Grid.ColumnDefinitions>
+          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="112"/></Grid.ColumnDefinitions>
             <TextBlock Text="Vertical" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <NumberBox x:Name="VerticalNumber" Grid.Column="1" Minimum="-100" Maximum="100" SmallChange="1" SpinButtonPlacementMode="Compact" ValueChanged="Number_Changed" AutomationProperties.Name="Vertical component"/>
+            <NumberBox x:Name="VerticalNumber" Grid.Column="1" Minimum="-2000" Maximum="2000" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="Number_Changed" AutomationProperties.Name="Vertical speed in input units per second"/>
           </Grid>
-          <Slider x:Name="VerticalSlider" Minimum="-100" Maximum="100" StepFrequency="1" ValueChanged="Slider_Changed" DoubleTapped="Vertical_Reset" AutomationProperties.Name="Vertical: up to down"/>
-          <Grid><TextBlock Text="Up" FontSize="11" Opacity="0.65"/><TextBlock Text="0" FontSize="11" Opacity="0.65" HorizontalAlignment="Center"/><TextBlock Text="Down" FontSize="11" Opacity="0.65" HorizontalAlignment="Right"/></Grid>
+          <Slider x:Name="VerticalSlider" Minimum="-2000" Maximum="2000" StepFrequency="1" ValueChanged="Slider_Changed" DoubleTapped="Vertical_Reset" AutomationProperties.Name="Vertical: up to down"/>
+          <Grid><TextBlock Text="Up −2000" FontSize="11" Opacity="0.65"/><TextBlock Text="units/s" FontSize="11" Opacity="0.65" HorizontalAlignment="Center"/><TextBlock Text="+2000 Down" FontSize="11" Opacity="0.65" HorizontalAlignment="Right"/></Grid>
         </StackPanel>
         <StackPanel Spacing="2">
-          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="84"/></Grid.ColumnDefinitions>
+          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="112"/></Grid.ColumnDefinitions>
             <TextBlock Text="Horizontal" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <NumberBox x:Name="HorizontalNumber" Grid.Column="1" Minimum="-100" Maximum="100" SmallChange="1" SpinButtonPlacementMode="Compact" ValueChanged="Number_Changed" AutomationProperties.Name="Horizontal component"/>
+            <NumberBox x:Name="HorizontalNumber" Grid.Column="1" Minimum="-2000" Maximum="2000" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="Number_Changed" AutomationProperties.Name="Horizontal speed in input units per second"/>
           </Grid>
-          <Slider x:Name="HorizontalSlider" Minimum="-100" Maximum="100" StepFrequency="1" ValueChanged="Slider_Changed" DoubleTapped="Horizontal_Reset" AutomationProperties.Name="Horizontal: left to right"/>
-          <Grid><TextBlock Text="Left" FontSize="11" Opacity="0.65"/><TextBlock Text="0" FontSize="11" Opacity="0.65" HorizontalAlignment="Center"/><TextBlock Text="Right" FontSize="11" Opacity="0.65" HorizontalAlignment="Right"/></Grid>
+          <Slider x:Name="HorizontalSlider" Minimum="-2000" Maximum="2000" StepFrequency="1" ValueChanged="Slider_Changed" DoubleTapped="Horizontal_Reset" AutomationProperties.Name="Horizontal: left to right"/>
+          <Grid><TextBlock Text="Left −2000" FontSize="11" Opacity="0.65"/><TextBlock Text="units/s" FontSize="11" Opacity="0.65" HorizontalAlignment="Center"/><TextBlock Text="+2000 Right" FontSize="11" Opacity="0.65" HorizontalAlignment="Right"/></Grid>
         </StackPanel>
         <StackPanel Spacing="2">
           <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="84"/></Grid.ColumnDefinitions>
             <TextBlock Text="Humanization" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <NumberBox x:Name="HumanNumber" Grid.Column="1" Minimum="0" Maximum="100" SmallChange="1" SpinButtonPlacementMode="Compact" ValueChanged="Number_Changed" AutomationProperties.Name="Humanization percent"/>
+            <NumberBox x:Name="HumanNumber" Grid.Column="1" Minimum="0" Maximum="100" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="Number_Changed" AutomationProperties.Name="Humanization percent"/>
           </Grid>
           <Slider x:Name="HumanSlider" Minimum="0" Maximum="100" StepFrequency="1" ValueChanged="Slider_Changed" AutomationProperties.Name="Humanization strength"/>
           <Grid><TextBlock Text="0%" FontSize="11" Opacity="0.65"/><TextBlock Text="100%" FontSize="11" Opacity="0.65" HorizontalAlignment="Right"/></Grid>
@@ -44,7 +44,7 @@
         <Button x:Name="PadButton" Padding="0" Width="236" Height="236" Background="Transparent" BorderThickness="1" CornerRadius="8" KeyDown="Pad_KeyDown" AutomationProperties.Name="Direction pad. Arrow keys adjust, double click resets.">
           <Canvas x:Name="PadCanvas" Width="234" Height="234" Background="Transparent" PointerPressed="Pad_Pressed" PointerMoved="Pad_Moved" PointerReleased="Pad_Released" PointerCaptureLost="Pad_CaptureLost" DoubleTapped="Pad_Reset"/>
         </Button>
-        <Button x:Name="PreviewButton" Click="Preview_Click" HorizontalAlignment="Stretch" ToolTipService.ToolTip="Local preview: 1.5 seconds, 0.8 canvas pixels per relative input unit. Never sends input.">
+        <Button x:Name="PreviewButton" Click="Preview_Click" HorizontalAlignment="Stretch" ToolTipService.ToolTip="Local 1.5-second preview, scaled to fit the pad.">
           <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Play"/><TextBlock x:Name="PreviewText" Text="Preview"/></StackPanel>
         </Button>
       </StackPanel>
@@ -63,13 +63,24 @@
     </Grid>
     <Grid Grid.Row="4" Margin="22,4,22,10">
       <StackPanel Orientation="Horizontal" Spacing="14">
-        <TextBlock x:Name="ModelLabel" Text="Smooth · hold to move" FontSize="11" Opacity="0.55"/>
-        <StackPanel x:Name="ArduinoStatus" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
+        <ComboBox x:Name="ModelCombo" MinWidth="126" FontSize="11" MinHeight="28" SelectionChanged="Model_Changed" AutomationProperties.Name="Humanization algorithm"/>
+        <Button x:Name="EffectsButton" Content="Effects" MinHeight="28" FontSize="11" AutomationProperties.Name="Combine humanization effects">
+          <Button.Flyout>
+            <Flyout>
+              <StackPanel Width="230" Spacing="8">
+                <CheckBox x:Name="PulseEffectCheck" Content="Pulse envelope" Checked="Effects_Changed" Unchecked="Effects_Changed"/>
+                <CheckBox x:Name="CorrectionEffectCheck" Content="Lateral corrections" Checked="Effects_Changed" Unchecked="Effects_Changed"/>
+                <TextBlock Text="Effects combine with the selected model and use the Humanization strength." TextWrapping="Wrap" FontSize="12" Opacity="0.7"/>
+              </StackPanel>
+            </Flyout>
+          </Button.Flyout>
+        </Button>
+        <StackPanel x:Name="ArduinoStatus" Orientation="Horizontal" Spacing="6" Visibility="Collapsed" VerticalAlignment="Center">
           <Ellipse x:Name="ArduinoLamp" Width="7" Height="7" VerticalAlignment="Center"/>
           <TextBlock x:Name="ArduinoStatusText" Text="Offline" FontSize="11"/>
         </StackPanel>
       </StackPanel>
-      <TextBlock Text="prod. by SleNdd" FontSize="11" Opacity="0.7" HorizontalAlignment="Right"/>
+      <TextBlock Text="prod. by SleNdd" FontSize="11" Opacity="0.7" HorizontalAlignment="Right" VerticalAlignment="Center"/>
     </Grid>
   </Grid>
 </Window>

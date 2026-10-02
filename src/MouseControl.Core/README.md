@@ -1,7 +1,9 @@
 # MouseControl.Core
 
 Managed .NET 10 motion, activation, and configuration code. Native input submission belongs
-to the application layer. `Smooth` and `Organic` provide synthetic motion variation.
+to the application layer. `Smooth`, `Organic`, `Wind`, `Pulse`, `Corrections`, and `Bezier` provide
+continuous synthetic motion variation. Model names `Smooth` and `Organic` retain their
+existing persisted enum values.
 
 ## Runtime contract
 
@@ -12,6 +14,10 @@ to the application layer. `Smooth` and `Organic` provide synthetic motion variat
   Each component is bounded by `MaxComponentRate * dtSeconds`. The path has a smooth onset,
   correlated speed/lateral variation, and timer partition invariance. Humanization zero
   ignores both seed and model; a zero vector always produces exact zero.
+- Optional trailing `PulseOverlay` and `CorrectionsOverlay` flags default to false. Each
+  activates its effect alongside the selected model. Selecting the matching base model
+  already activates that effect; setting its flag does not apply it twice. Nonzero commanded
+  components retain their sign; a component commanded to zero may vary laterally.
 - Nonpositive dt produces zero. Nonfinite dt throws. A dt above 100 ms resets onset and
   returns zero; the caller must not accumulate catch-up time. `ResetSession()` resets the
   seeded path. `UpdateSettings()` validates and resets, leaving prior state intact on failure.
@@ -21,6 +27,51 @@ to the application layer. `Smooth` and `Organic` provide synthetic motion variat
 - Serialize runtime calls on one owner thread. On profile changes, invalidate the gate and
   reset the generator. When activation stops, reset the generator and discard the consumer's
   fractional input-unit carry. Integer rounding/input injection belongs to the application.
+
+## Motion models and combinations
+
+All models integrate linear interpolation between velocity samples on a fixed 200 Hz grid.
+Caller tick boundaries do not decide random target updates. Every output has the common onset
+factor `1 - exp(-t / 0.16)` and is clamped per component after applying the effects. With
+command vector `(x, y)`, scalar speed `s`, and lateral coefficient `l`, the components before
+clamping are `(x*s - y*l, y*s + x*l) * MaxComponentRate`. Variation therefore scales with the
+command vector, including small velocities. Component clamping can reduce variation near
+the configured rate limit or where a lateral correction would reverse a commanded axis.
+
+At Humanization 1, the model coefficients before component clamping are:
+
+| Model | Speed coefficient | Lateral coefficient | Timing |
+| --- | --- | --- | --- |
+| Smooth | `1 + 0.55*q` | `0.45*r` | Noise targets held 80–220 ms; exponential response with 100 ms time constant |
+| Organic | `1 + 0.85*q` | `0.80*r` | Targets held 35–150 ms; 45 ms response, noise slope capped at 10/second |
+| Wind | `1 + 0.75*q` | `0.90*r` | Targets held 150–500 ms; damped inertia `q'' = 36*(target-q) - 10*q'` |
+| Pulse | Envelope from 0 to 1.80 | `0.45*r * envelope` | Evolving 0.50–1.00 s cycles; 12–24% of each cycle is a zero-motion pause |
+| Corrections | `1 + 0.45*cos(phase)` | `0.90*sin(phase)` | Alternating arcs; cycle period evolves within 0.80–1.40 s |
+| Bezier | Filtered curve derivative, within 0–3 at full strength | Filtered perpendicular derivative, within ±1.80 at full strength | Evolving 0.45–1.20 s signed relative segments; 100 ms velocity filter and slope cap 10/second |
+
+`q` and `r` are bounded correlated states in `[-1, 1]`. Seeded target-hold durations move 35%
+toward successive random durations and are quantized upward to the integration grid. This
+produces bounded, nonperiodic refresh intervals rather than one uniform cadence. Corrections
+refreshes its period target every 180–700 ms and filters it with a 350 ms time constant;
+the arc phase continues through period changes. Pulse cycle periods and pause fractions also
+evolve by 35% toward new seeded targets. Its squared-sine envelope joins each pause with
+zero slope at both edges.
+
+Bezier uses the adapted MIT-licensed GhostCursorSharp geometry in
+`ThirdParty/GhostCursorBezier.cs`; its source attribution and license are retained beside that
+file. Each segment endpoint is the command vector times the segment duration. Control-point
+spread is `0.60 * endpointMagnitude * h`. The derivative divided by duration supplies the
+velocity shape, with speed deviation blended by `h`; filtered velocity continues through
+segment boundaries. Filtering and component caps mean the submitted displacement is not an
+exact traversal of the geometric endpoint. The geometry has no absolute screen-coordinate
+clamping and supports signed coordinates in all quadrants.
+
+Corrections adds its speed deviation and lateral arc to the base coefficients. Pulse then
+multiplies both resulting components by `1 - h + h*envelope`, where `h` is Humanization.
+Consequently a full-strength Pulse pause stops the entire combination, including Corrections.
+The two effects use separate derived random streams, so enabling them does not consume the
+base model's random sequence. Humanization scales deviations and lateral variation; at zero
+the generator bypasses every effect and returns the same seeded-independent onset baseline.
 
 ## Storage contract
 
@@ -40,7 +91,8 @@ Version 1 is a single camelCase JSON document:
     "toggleHotkey": { "virtualKey": 119, "modifiers": "None" },
     "activeProfileId": "6d3433a2-a5dc-4596-b117-9cb56a18721e",
     "inputBackend": "Windows",
-    "arduinoPort": ""
+    "arduinoPort": "",
+    "outputRateHz": 1000
   },
   "profiles": [
     {
@@ -50,7 +102,8 @@ Version 1 is a single camelCase JSON document:
       "activation": "Lmb",
       "motion": {
         "x": 0, "y": 0, "humanization": 0,
-        "maxComponentRate": 150, "model": "Smooth"
+        "maxComponentRate": 150, "model": "Smooth",
+        "pulseOverlay": false, "correctionsOverlay": false
       }
     }
   ]
@@ -61,6 +114,9 @@ Original version-one fields are required. `inputBackend` and `arduinoPort` are o
 reading older files and default to `Windows` and an empty string. Backend values are `Windows`
 or `Arduino`; an Arduino selection requires a valid COM port name. Persisting a selection does
 not itself open a connection or enable motion.
+`outputRateHz` is optional in older files, defaults to 1000, and must be 125, 250, 500, or 1000.
+`pulseOverlay` and `correctionsOverlay` are optional when reading older motion settings and
+default to false. All six model names and both overlay flags roundtrip in version 1.
 
 IDs are nonempty and unique; names may repeat. At least one profile
 must exist, and the active ID must refer to one. Colors use `#RRGGBB`. Activation values are
@@ -83,3 +139,6 @@ dotnet run --project tests/MouseControl.Core.Tests/MouseControl.Core.Tests.cspro
 ```
 
 The harness uses isolated temporary directories and exits nonzero on a failed assertion.
+Motion checks cover all models, effect combinations, seeded reset, fixed-grid partition
+invariance, bounds/sign preservation, exact zero, stall reset, nonperiodic refresh timing,
+command-vector scaling, smooth onset, full-strength pauses, and optional-field compatibility.

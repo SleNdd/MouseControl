@@ -1,5 +1,6 @@
 using MouseControl.App.Services;
 using MouseControl.Core;
+using System.Diagnostics;
 
 var tests = new (string Name, Action Run)[]
 {
@@ -10,7 +11,14 @@ var tests = new (string Name, Action Run)[]
     ("zero/unexpected backend result disables and permits safe retry", BackendFailure),
     ("foreground suspension requires a fresh hold", ForegroundSuspension),
     ("worker observer may dispose without self-join", ObserverDisposal),
+    ("all-status observer disposal is reentrant and repeated callers join", ReentrantDisposal),
+    ("scheduler creation failure is terminal and closes the backend", SchedulerCreationFailure),
     ("fresh activations obtain a new seed and stopped setters are safe", FreshSeeds),
+    ("output rates validate, disable and rearm without mutation on rejection", OutputRates),
+    ("rate changes serialize with an outstanding output", SerializedRateChange),
+    ("one-shot cadence drops missed deadlines and resets changed rates", SchedulingDeadlines),
+    ("native and normal timer waits wake on cancellation", TimerCancellation),
+    ("blocked scheduler disposal joins and long gaps require fresh input", SchedulerIsolation),
     ("WTS session transition mapping", SessionTransitions),
     ("Arduino frame checksum and identification", BackendChecks.Protocol),
     ("Arduino segmented movement, one outstanding ACK and stop", BackendChecks.Segments),
@@ -18,7 +26,8 @@ var tests = new (string Name, Action Run)[]
     ("backend switches disable, preserve on failure, and stay isolated", BackendChecks.Switching),
     ("Arduino stop failure and unplug disable without fallback", BackendChecks.Disconnect),
     ("obsolete reconnect cannot change current selection", BackendChecks.ReconnectIsolation),
-    ("simulation cannot open serial", BackendChecks.SimulationIsolation)
+    ("simulation cannot open serial", BackendChecks.SimulationIsolation),
+    ("speed-unit migration preserves saved profile velocities", MotionUiChecks.PreserveProfiles)
 };
 var failures = 0;
 foreach (var test in tests)
@@ -182,6 +191,70 @@ static void FreshSeeds()
     Assert(!runtime.Enabled && runtime.Status == "Stopped", "Stopped setters revived or changed terminal state.");
 }
 
+static void ReentrantDisposal()
+{
+    // Hold the worker during cancellation to prove every external Dispose waits for its exit.
+    using var scheduler = new DelayedCancellationScheduler();
+    using var runtime = new RuntimeService(true, null, _ => false, () => false, null,
+        schedulerFactory: () => scheduler);
+    Assert(scheduler.Waiting.Wait(TimeSpan.FromSeconds(3)), "Worker did not enter scheduler.");
+    var callbacks = 0;
+    runtime.StatusChanged += _ => { Interlocked.Increment(ref callbacks); runtime.Dispose(); };
+    var first = Task.Run(runtime.Dispose);
+    Assert(scheduler.Cancelled.Wait(TimeSpan.FromSeconds(3)), "Dispose did not cancel scheduler.");
+    using var secondEntered = new ManualResetEventSlim();
+    var second = Task.Run(() => { secondEntered.Set(); runtime.Dispose(); });
+    try
+    {
+        Assert(secondEntered.Wait(TimeSpan.FromSeconds(3)), "Repeated caller did not start.");
+        Thread.Sleep(30);
+        Assert(!first.IsCompleted && !second.IsCompleted, "Repeated/reentrant disposal returned before worker exit.");
+        Assert(Volatile.Read(ref callbacks) == 1, "Stopped notification recursed or was published repeatedly.");
+    }
+    finally { scheduler.Exit.Set(); }
+    Assert(Task.WaitAll([first, second], TimeSpan.FromSeconds(3)), "Reentrant external disposal deadlocked.");
+    runtime.Dispose();
+    Assert(runtime.Status == "Stopped" && !runtime.Enabled && callbacks == 1,
+        "Repeated disposal changed terminal state or republished Stopped.");
+
+    int held = 0, workerCallbacks = 0;
+    using var workerRuntime = new RuntimeService(true, (_, _) => { }, _ => Volatile.Read(ref held) != 0, () => false);
+    workerRuntime.SetProfile(Sample()); workerRuntime.SetEnabled(true); Thread.Sleep(40);
+    workerRuntime.StatusChanged += _ => { Interlocked.Increment(ref workerCallbacks); workerRuntime.Dispose(); };
+    held = 1;
+    Eventually(() => workerRuntime.Status == "Stopped", "All-status worker observer failed to stop.");
+    workerRuntime.Dispose(); // Joins after worker self-disposal.
+    Assert(!workerRuntime.Enabled && workerCallbacks == 2,
+        "Worker self-disposal recursed, deadlocked or published an extra status.");
+}
+
+static void SchedulerCreationFailure()
+{
+    using var create = new ManualResetEventSlim();
+    var backend = new DisposableTestBackend();
+    using var runtime = new RuntimeService(false, null, _ => false, () => false,
+        (_, _) => throw new InvalidOperationException("Native input must remain isolated."),
+        arduinoFactory: _ => backend, schedulerFactory: () =>
+        {
+            create.Wait(TimeSpan.FromSeconds(3));
+            throw new System.ComponentModel.Win32Exception(87, "injected timer creation failure");
+        });
+    Assert(runtime.SetBackend(InputBackendKind.Arduino, "COM9", out _), "Fake backend was not selected.");
+    create.Set();
+    // FailLocked closes once; the second close identifies terminal worker cleanup, which sets
+    // the disposed flag before closing. Join only after that transition to retain its diagnostic.
+    Eventually(() => runtime.Status.Contains("injected timer creation failure", StringComparison.Ordinal) &&
+        !backend.Connected && backend.Disposals >= 2,
+        "Scheduler creation failure was not terminal or failed to close backend.");
+    runtime.Dispose(); // Join before checking setters against terminal state.
+    var terminalStatus = runtime.Status;
+    runtime.SetEnabled(true); runtime.SetOutputRateHz(125); runtime.Dispose(); runtime.Dispose();
+    Assert(!runtime.Enabled && runtime.RequestedOutputRateHz == 1000 && runtime.Status == terminalStatus &&
+        !runtime.BackendConnected && !runtime.SetBackend(InputBackendKind.Windows, null, out _) &&
+        runtime.BackendKind == InputBackendKind.Arduino && backend.Disposals >= 2,
+        "Terminal scheduler failure revived runtime or repeated disposal changed its failure status.");
+}
+
 static void SessionTransitions()
 {
     foreach (var notification in new nuint[] { 2, 4, 6, 7 })
@@ -190,4 +263,173 @@ static void SessionTransitions()
         Assert(!WindowBridge.SessionBlockedAfter(notification, true), $"WTS {notification} should resume.");
     Assert(WindowBridge.SessionBlockedAfter(9, true) && !WindowBridge.SessionBlockedAfter(9, false),
         "Unknown/control-change notification should preserve prior suspension.");
+}
+
+static void OutputRates()
+{
+    int held = 0, count = 0;
+    using var runtime = new RuntimeService(true, (_, _) => Interlocked.Increment(ref count),
+        _ => Volatile.Read(ref held) != 0, () => false);
+    Assert(runtime.RequestedOutputRateHz == 1000, "Default requested rate is not 1000Hz.");
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+    Eventually(() => count > 3, "Output did not start.");
+    foreach (var unsupported in new[] { 0, -1, 200, 4000 })
+    {
+        try { runtime.SetOutputRateHz(unsupported); throw new InvalidOperationException("Invalid rate accepted."); }
+        catch (ArgumentOutOfRangeException) { }
+        Assert(runtime.Enabled && runtime.RequestedOutputRateHz == 1000, "Invalid rate mutated active runtime.");
+    }
+    runtime.SetOutputRateHz(1000);
+    Assert(runtime.Enabled, "Unchanged rate disabled motion.");
+    foreach (var rate in new[] { 125, 250, 500, 1000 })
+    {
+        runtime.SetOutputRateHz(rate);
+        var stopped = count;
+        Assert(runtime.RequestedOutputRateHz == rate && !runtime.Enabled, "Rate change did not disable motion.");
+        runtime.SetEnabled(true); Thread.Sleep(40);
+        Assert(count == stopped, "Rate change resumed held input.");
+        ReleaseAndPress(ref held);
+        Eventually(() => count > stopped, "New rate did not rearm.");
+    }
+    runtime.Dispose(); runtime.SetOutputRateHz(125);
+    Assert(runtime.RequestedOutputRateHz == 1000 && runtime.Status == "Stopped", "Rate setter revived disposed runtime.");
+    try
+    {
+        using var invalid = new RuntimeService(true, outputRateHz: 4000);
+        throw new InvalidOperationException("Constructor accepted unsupported rate.");
+    }
+    catch (ArgumentOutOfRangeException) { }
+}
+
+static void SerializedRateChange()
+{
+    int held = 0, count = 0;
+    using var entered = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    using var runtime = new RuntimeService(true, (_, _) =>
+    {
+        Interlocked.Increment(ref count); entered.Set(); release.Wait(TimeSpan.FromSeconds(3));
+    }, _ => Volatile.Read(ref held) != 0, () => false);
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true); Thread.Sleep(40); held = 1;
+    Assert(entered.Wait(TimeSpan.FromSeconds(3)), "Output did not start.");
+    var change = Task.Run(() => runtime.SetOutputRateHz(125));
+    try
+    {
+        Thread.Sleep(40);
+        Assert(!change.IsCompleted, "Rate change bypassed the output lock.");
+    }
+    finally { release.Set(); }
+    change.GetAwaiter().GetResult();
+    var stopped = count;
+    Thread.Sleep(40);
+    Assert(!runtime.Enabled && count == stopped && runtime.RequestedOutputRateHz == 125,
+        "Output continued after rate change returned.");
+}
+
+static void SchedulingDeadlines()
+{
+    var cadence = new OutputCadence();
+    long now = 100 * Stopwatch.Frequency;
+    var period = Stopwatch.Frequency / 1000;
+    Assert(cadence.NextDelayTicks(now, 1000) == period, "Initial interval changed.");
+    cadence.RecordWake(now);
+    Assert(cadence.NextDelayTicks(now + period / 2, 1000) == period - period / 2,
+        "Processing time was not included in the interval.");
+    Assert(cadence.NextDelayTicks(now + period * 40, 1000) == period,
+        "Overrun scheduled an immediate catchup tick.");
+    Assert(cadence.NextDelayTicks(now + period * 40, 125) == Stopwatch.Frequency / 125,
+        "Rate change kept an old deadline.");
+}
+
+static void TimerCancellation()
+{
+    foreach (var highResolution in new[] { true, false })
+    {
+        using var scheduler = new OutputScheduler(highResolution);
+        using var stop = new CancellationTokenSource();
+        using var entered = new ManualResetEventSlim();
+        var wait = Task.Run(() =>
+        {
+            entered.Set();
+            try { scheduler.WaitForDelay(TimeSpan.FromSeconds(30), stop.Token); return false; }
+            catch (OperationCanceledException) { return true; }
+        });
+        Assert(entered.Wait(TimeSpan.FromSeconds(3)), "Timer worker did not start.");
+        Thread.Sleep(20);
+        Assert(!wait.IsCompleted, "One-shot timer did not block.");
+        stop.Cancel();
+        Assert(wait.Wait(TimeSpan.FromSeconds(3)) && wait.Result, "Cancellation failed to wake timer wait.");
+        if (!highResolution) Assert(!scheduler.UsesHighResolution, "Normal fallback claimed high resolution.");
+    }
+}
+
+static void SchedulerIsolation()
+{
+    int held = 0, count = 0;
+    using var scheduler = new ControlledScheduler();
+    using var runtime = new RuntimeService(true, (_, _) => Interlocked.Increment(ref count),
+        _ => Volatile.Read(ref held) != 0, () => false, null, schedulerFactory: () => scheduler);
+    runtime.SetProfile(Sample()); runtime.SetEnabled(true);
+    scheduler.Advance(); // Observe release and arm.
+    held = 1;
+    Thread.Sleep(40); scheduler.Advance(); // Allow the gradual onset to accumulate a nonzero integer delta.
+    Assert(count > 0, "Controlled active tick submitted no motion.");
+    var beforeGap = count;
+    Thread.Sleep(130); scheduler.Advance();
+    Assert(count == beforeGap && runtime.Status == "Idle", "Long gap caught up instead of dropping motion.");
+    Thread.Sleep(5); scheduler.Advance();
+    Assert(count == beforeGap, "Long gap resumed an already-held binding.");
+    held = 0; scheduler.Advance(); held = 1;
+    Thread.Sleep(40); scheduler.Advance();
+    Assert(count > beforeGap, "Long-gap fresh release/press did not rearm.");
+    var disposal = Task.Run(runtime.Dispose);
+    Assert(disposal.Wait(TimeSpan.FromSeconds(3)) && scheduler.Disposed,
+        "Disposal did not cancel the blocked scheduler and join its owner.");
+}
+
+sealed class ControlledScheduler : IOutputScheduler
+{
+    private readonly SemaphoreSlim _ticks = new(0);
+    private readonly AutoResetEvent _waiting = new(false);
+    internal bool Disposed { get; private set; }
+    public void WaitForNextTick(int requestedRateHz, CancellationToken cancellationToken)
+    {
+        _waiting.Set();
+        _ticks.Wait(cancellationToken);
+    }
+    internal void Advance()
+    {
+        if (!_waiting.WaitOne(TimeSpan.FromSeconds(3))) throw new InvalidOperationException("Worker did not reach scheduler.");
+        _ticks.Release();
+        if (!_waiting.WaitOne(TimeSpan.FromSeconds(3))) throw new InvalidOperationException("Worker did not finish tick.");
+        _waiting.Set(); // Keep the already-blocked next wait visible to the next Advance.
+    }
+    public void Dispose() => Disposed = true;
+}
+
+sealed class DelayedCancellationScheduler : IOutputScheduler
+{
+    internal ManualResetEventSlim Waiting { get; } = new();
+    internal ManualResetEventSlim Cancelled { get; } = new();
+    internal ManualResetEventSlim Exit { get; } = new();
+    public void WaitForNextTick(int requestedRateHz, CancellationToken cancellationToken)
+    {
+        Waiting.Set();
+        cancellationToken.WaitHandle.WaitOne();
+        Cancelled.Set();
+        Exit.Wait(TimeSpan.FromSeconds(3));
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+    public void Dispose() { }
+}
+
+sealed class DisposableTestBackend : IInputBackend
+{
+    public InputBackendKind Kind => InputBackendKind.Arduino;
+    public string Port => "COM9";
+    public bool Connected { get; private set; } = true;
+    internal int Disposals { get; private set; }
+    public void Move(int dx, int dy) => throw new InvalidOperationException("Output must remain disabled.");
+    public void Stop() { }
+    public void Dispose() { Connected = false; Disposals++; }
 }

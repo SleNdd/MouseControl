@@ -4,9 +4,33 @@
 
 `RuntimeService` starts disabled and owns its gate, motion generator, fractional relative
 input-unit carry, and submission under one lock. `SetEnabled(false)` returns only after any
-current submission finishes; no later submission is queued. An 8 ms `PeriodicTimer` uses
-monotonic elapsed time. Gaps over 100 ms invalidate activation and clear motion/carry. Editing,
+current submission finishes; no later submission is queued. The dedicated worker measures
+actual monotonic elapsed time. Gaps over 100 ms invalidate activation and clear motion/carry. Editing,
 switching profiles, suspending, and resuming require a fresh release/press.
+
+`RequestedOutputRateHz` is the requested host cadence: 125, 250, 500 or 1000 Hz, default 1000.
+`SetOutputRateHz` validates these choices; a changed rate disables motion and clears the session
+under the output lock. Re-enabling still requires a fresh release/press. Passing the same rate
+does nothing; an invalid rate throws without changing the current session. The optional public
+constructor `outputRateHz` argument applies a saved rate before the worker starts.
+
+`OutputScheduler` uses an unnamed Windows waitable timer with
+`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` (Windows 10 version 1803 and later), falling back to a
+normal waitable timer if that creation flag is unavailable. Each wait is one-shot and cancellation
+wakes the blocked worker. The worker owns and closes its timer after exiting. It uses no busy spin,
+`timeBeginPeriod`, driver, administrator privilege or timer callback queue. The portable service
+harness uses a cancellable blocking wait outside Windows. Processing consumes the interval;
+if processing has already missed the next deadline, the scheduler starts a fresh interval and
+drops the missed deadlines. It never queues catchup movement or submits anything while idle.
+
+These are requested rates, not guaranteed delivery rates. Effective cadence depends on Windows
+scheduling and timer availability, nonzero integer deltas, and the selected transport. Arduino
+commands wait for ACKs serially, so that backpressure can lower the achieved rate. A full-speed
+Leonardo USB HID endpoint can poll at most once per 1 ms interval (1000 Hz); selecting 1000 Hz
+does not establish that every host tick delivers a USB report or a target application event.
+The waitable timer API is documented by Microsoft in
+[CreateWaitableTimerExW](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createwaitabletimerexw)
+and [SetWaitableTimer](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-setwaitabletimer).
 
 Each fresh active transition constructs a generator with a new seed from `Random.Shared`.
 An optional seed provider supports deterministic development checks. Humanization zero remains

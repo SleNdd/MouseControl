@@ -8,7 +8,10 @@ and .NET 10.
 - Three sliders with numeric fields: signed vertical and horizontal components, and
   Humanization strength.
 - A synchronized square direction pad and local motion preview.
-- Smooth and Organic motion models, with a configurable maximum component rate.
+- Smooth, Organic, Wind, Pulse, Corrections, and Bezier motion models, with combinable pulse
+  and lateral-correction effects.
+- Axis speeds from −2000 to +2000 relative input units/second, with one-unit increments.
+- Requested host output rates of 125, 250, 500, or 1000 Hz.
 - Hold-to-activate bindings: LMB, RMB, LMB + RMB, MMB, Alt, or Shift.
 - A master enable switch and configurable global toggle hotkey; the default is F8.
 - Profile tabs with editable names and colors, duplication, deletion, and Undo.
@@ -20,7 +23,7 @@ and .NET 10.
 
 The Windows backend uses the documented `SendInput` API. The Arduino backend uses the
 included [Leonardo firmware](firmware/MouseControlLeonardo/README.md) over the selected COM
-port, with the board's standard USB identity. Component rates
+port. The default firmware build uses the board's standard USB identity. Component rates
 are measured in relative input units per second; Windows pointer settings affect the resulting
 screen movement.
 
@@ -46,14 +49,23 @@ to the user's runtime cache at launch. Settings are stored separately.
 
 1. Set horizontal and vertical direction with the sliders, numeric fields, or direction pad.
    Negative X moves left, positive X right, negative Y up, and positive Y down.
-2. Set Humanization from 0 to 100%. Use Settings to choose Smooth or Organic and adjust
-   the component rate. The preview draws locally and does not move the system cursor.
+2. Set Humanization from 0 to 100%. Choose a model in the footer and use **Effects** to
+   combine pulse and lateral corrections. The preview draws locally and fits its trajectory
+   to the pad; it does not move the system cursor.
 3. Choose an activation binding and enable motion with the switch or global toggle key.
 4. Switch to another application, release the activation binding, then hold it to move.
 
 The app starts disabled. Motion pauses while MouseControl is foreground. Enabling, editing,
 switching profiles, or returning from suspension requires release and a fresh activation
 press. Releasing the binding stops movement.
+
+Axis values are commanded speeds in relative input units/second. The range is ±2000 per
+axis, with one-unit slider and numeric increments. Existing profiles keep their commanded
+speeds when converted from the older percentage controls.
+
+**Settings → Requested output rate** selects the host scheduling target, defaulting to
+1000 Hz. This is separate from motion speed and USB polling. Windows scheduling and serial
+acknowledgements affect the effective output rate. See [motion models](docs/MOTION_MODELS.md).
 
 Use **+** to create a profile from the current settings. Double-click a tab or use its context
 menu to edit its name/color; the context menu also offers duplication. Closing a profile tab
@@ -96,12 +108,14 @@ Firmware was compiled with Arduino AVR Boards 1.8.8 and Mouse 1.0.1. Compile wit
 CLI after installing those dependencies:
 
 ```powershell
-arduino-cli compile --fqbn arduino:avr:leonardo firmware/MouseControlLeonardo
+.\scripts\build-firmware.ps1
 ```
 
 ## Documents
 
 - [UI and interaction specification](docs/UI_SPEC.md)
+- [Motion models and timing](docs/MOTION_MODELS.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Visual concepts](docs/concepts/README.md)
 - [Core contracts](src/MouseControl.Core/README.md)
 - [Application service contracts](src/MouseControl.App/Services/README.md)

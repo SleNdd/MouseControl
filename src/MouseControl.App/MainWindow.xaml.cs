@@ -36,6 +36,7 @@ public sealed partial class MainWindow : Window
     private Profile? _deleted, _undoReplacement;
     private int _deletedIndex, _previewFrame;
     private IReadOnlyList<MotionDelta> _previewPoints = Array.Empty<MotionDelta>();
+    private double _previewScale = 0.8;
     private readonly bool _smoke;
     private readonly string _dataFolder;
     private string? _initialError;
@@ -50,12 +51,14 @@ public sealed partial class MainWindow : Window
         _store = new ProfileStore(System.IO.Path.Combine(_dataFolder, "profiles.json"));
         var loaded = _store.Load();
         _configuration = loaded.Configuration ?? ProfileConfiguration.CreateDefault();
+        _configuration = MotionUi.UseSpeedUnits(_configuration, out var convertedSpeedUnits);
         if (!loaded.Success)
         {
             _initialError = "Settings could not be read. The original file is preserved. This session saves to a recovery file. " + loaded.Error;
             _store = new ProfileStore(System.IO.Path.Combine(_dataFolder, "profiles.recovery-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".json"));
         }
         InitializeComponent();
+        ModelCombo.ItemsSource = Enum.GetValues<MotionModel>();
         Title = "MouseControl";
         SystemBackdrop = new DesktopAcrylicBackdrop();
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -63,6 +66,7 @@ public sealed partial class MainWindow : Window
         AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(720 * scale), (int)(500 * scale)));
         if (AppWindow.Presenter is OverlappedPresenter presenter) presenter.IsMaximizable = false;
         _runtime = new RuntimeService(smoke);
+        _runtime.SetOutputRateHz(_configuration.AppSettings.OutputRateHz);
         _runtime.SetProfile(Current);
         _runtime.StatusChanged += _ => DispatcherQueue.TryEnqueue(RefreshStatus);
         _runtime.BackendChanged += () => DispatcherQueue.TryEnqueue(RefreshBackendStatus);
@@ -81,7 +85,7 @@ public sealed partial class MainWindow : Window
         if (!_bridge.TrayAvailable) _initialError = _bridge.AvailabilityError;
         _system.ColorValuesChanged += System_ColorValuesChanged;
         _saveTimer.Tick += (_, _) => Save();
-        _previewTimer.Tick += (_, _) => { _previewFrame = (_previewFrame + 1) % Math.Max(1, _previewPoints.Count); DrawPad(); };
+        _previewTimer.Tick += (_, _) => { _previewFrame = (_previewFrame + 4) % Math.Max(1, _previewPoints.Count); DrawPad(); };
         _connectionTimer.Tick += (_, _) => _ = TryConnectArduino();
         Closed += Window_Closed;
         AppWindow.Closing += (_, args) =>
@@ -102,6 +106,7 @@ public sealed partial class MainWindow : Window
         _updating = false;
         RefreshStatus();
         RefreshBackendStatus();
+        if (convertedSpeedUnits) MarkDirty();
         var keyMenu = new MenuFlyout();
         var escapeKey = new MenuFlyoutItem { Text = "Use Escape as toggle key" };
         escapeKey.Click += (_, _) => TryCaptureHotkey(new GlobalHotkey((int)VirtualKey.Escape, HotkeyModifiers.None));
@@ -115,6 +120,11 @@ public sealed partial class MainWindow : Window
         Root.RequestedTheme = background.R + background.G + background.B < 384 ? ElementTheme.Dark : ElementTheme.Light;
         // Windows owns material fallback; custom canvas colors follow the same live theme.
         RebuildPreview();
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            foreach (var number in new[] { VerticalNumber, HorizontalNumber, HumanNumber })
+                if (number.IsLoaded) HideNumericClearButton(number);
+        });
     }
 
     private void RebuildTabs()
@@ -147,12 +157,21 @@ public sealed partial class MainWindow : Window
     {
         var before = _updating; _updating = true;
         var motion = Current.Motion;
-        VerticalSlider.Value = VerticalNumber.Value = Math.Round(motion.Y * 100);
-        HorizontalSlider.Value = HorizontalNumber.Value = Math.Round(motion.X * 100);
+        VerticalSlider.Value = Math.Round(motion.Y * MotionUi.MaximumSpeed);
+        VerticalNumber.Value = Math.Round(motion.Y * MotionUi.MaximumSpeed, 2);
+        HorizontalSlider.Value = Math.Round(motion.X * MotionUi.MaximumSpeed);
+        HorizontalNumber.Value = Math.Round(motion.X * MotionUi.MaximumSpeed, 2);
         HumanSlider.Value = HumanNumber.Value = Math.Round(motion.Humanization * 100);
         ActivationCombo.SelectedIndex = (int)Current.Activation;
         HotkeyButton.Content = _capturing ? "Press a key…" : FormatHotkey(_configuration.AppSettings.ToggleHotkey);
-        ModelLabel.Text = $"{motion.Model} · hold to move";
+        ModelCombo.SelectedItem = motion.Model;
+        ToolTipService.SetToolTip(ModelCombo, MotionUi.Describe(motion.Model));
+        PulseEffectCheck.IsChecked = motion.PulseOverlay || motion.Model == MotionModel.Pulse;
+        PulseEffectCheck.IsEnabled = motion.Model != MotionModel.Pulse;
+        CorrectionEffectCheck.IsChecked = motion.CorrectionsOverlay || motion.Model == MotionModel.Corrections;
+        CorrectionEffectCheck.IsEnabled = motion.Model != MotionModel.Corrections;
+        var effects = (PulseEffectCheck.IsChecked == true ? 1 : 0) + (CorrectionEffectCheck.IsChecked == true ? 1 : 0);
+        EffectsButton.Content = effects == 0 ? "Effects" : $"Effects · {effects}";
         _updating = before;
         RebuildPreview();
     }
@@ -252,19 +271,57 @@ public sealed partial class MainWindow : Window
     {
         if (_updating || _runtime is null) return;
         if (sender is not Slider slider) return;
-        if (slider == VerticalSlider) SetVector(Current.Motion.X, args.NewValue / 100);
-        else if (slider == HorizontalSlider) SetVector(args.NewValue / 100, Current.Motion.Y);
+        if (slider == VerticalSlider) SetVector(Current.Motion.X, args.NewValue / MotionUi.MaximumSpeed);
+        else if (slider == HorizontalSlider) SetVector(args.NewValue / MotionUi.MaximumSpeed, Current.Motion.Y);
         else ReplaceProfile(Current with { Motion = Current.Motion with { Humanization = args.NewValue / 100 } });
     }
+    private void Number_Loaded(object sender, RoutedEventArgs args) => HideNumericClearButton((NumberBox)sender);
+
+    private static void HideNumericClearButton(NumberBox number)
+    {
+        number.ApplyTemplate();
+        var input = FindTemplatePart<TextBox>(number, "InputBox");
+        input?.ApplyTemplate();
+        if (FindTemplatePart<Button>(number, "DeleteButton") is not { } clear) return;
+        // WinUI 1.8 exposes no clear-button option. Zero size survives focus-state
+        // visibility changes while retaining the native numeric editor and theme.
+        clear.MinWidth = clear.MinHeight = clear.Width = clear.Height = 0;
+        clear.Opacity = 0;
+        clear.Visibility = Visibility.Collapsed;
+        clear.IsHitTestVisible = clear.IsTabStop = false;
+    }
+
+    private static T? FindTemplatePart<T>(DependencyObject root, string name) where T : FrameworkElement
+    {
+        if (root is T element && element.Name == name) return element;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            if (FindTemplatePart<T>(VisualTreeHelper.GetChild(root, index), name) is { } found) return found;
+        return null;
+    }
+
     private void Number_Changed(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
         if (_updating || !double.IsFinite(args.NewValue) || _runtime is null) return;
-        if (sender == VerticalNumber) SetVector(Current.Motion.X, Math.Clamp(args.NewValue, -100, 100) / 100);
-        else if (sender == HorizontalNumber) SetVector(Math.Clamp(args.NewValue, -100, 100) / 100, Current.Motion.Y);
+        if (sender == VerticalNumber) SetVector(Current.Motion.X, Math.Clamp(args.NewValue, -MotionUi.MaximumSpeed, MotionUi.MaximumSpeed) / MotionUi.MaximumSpeed);
+        else if (sender == HorizontalNumber) SetVector(Math.Clamp(args.NewValue, -MotionUi.MaximumSpeed, MotionUi.MaximumSpeed) / MotionUi.MaximumSpeed, Current.Motion.Y);
         else ReplaceProfile(Current with { Motion = Current.Motion with { Humanization = Math.Clamp(args.NewValue, 0, 100) / 100 } });
     }
     private void Vertical_Reset(object sender, DoubleTappedRoutedEventArgs e) { SetVector(Current.Motion.X, 0); e.Handled = true; }
     private void Horizontal_Reset(object sender, DoubleTappedRoutedEventArgs e) { SetVector(0, Current.Motion.Y); e.Handled = true; }
+    private void Model_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_updating || _runtime is null || ModelCombo.SelectedItem is not MotionModel model) return;
+        ReplaceProfile(Current with { Motion = Current.Motion with { Model = model } });
+    }
+    private void Effects_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_updating || _runtime is null) return;
+        ReplaceProfile(Current with { Motion = Current.Motion with
+        {
+            PulseOverlay = PulseEffectCheck.IsChecked == true && Current.Motion.Model != MotionModel.Pulse,
+            CorrectionsOverlay = CorrectionEffectCheck.IsChecked == true && Current.Motion.Model != MotionModel.Corrections
+        } });
+    }
     private void Enabled_Toggled(object sender, RoutedEventArgs e) { if (_updating || _runtime is null) return; _runtime.SetEnabled(EnabledSwitch.IsOn); RefreshStatus(); }
     private void Activation_Changed(object sender, SelectionChangedEventArgs e)
     {
@@ -384,7 +441,7 @@ public sealed partial class MainWindow : Window
     private void Pad_Reset(object sender, DoubleTappedRoutedEventArgs e) { SetVector(0, 0); e.Handled = true; }
     private void Pad_KeyDown(object sender, KeyRoutedEventArgs e)
     {
-        var step = Native.Down(0x11) ? 0.1 : 0.01;
+        var step = (Native.Down(0x11) ? 10 : 1) / MotionUi.MaximumSpeed;
         var x = Current.Motion.X; var y = Current.Motion.Y;
         switch (e.Key) { case VirtualKey.Left: x -= step; break; case VirtualKey.Right: x += step; break; case VirtualKey.Up: y -= step; break; case VirtualKey.Down: y += step; break; case VirtualKey.Home: x = y = 0; break; default: return; }
         SetVector(x, y); e.Handled = true;
@@ -398,6 +455,9 @@ public sealed partial class MainWindow : Window
         var points = new List<MotionDelta>(); double x = 0, y = 0;
         for (int i = 0; i < 180; i++) { var d = model.Step(1.0 / 120); x += d.Dx; y += d.Dy; points.Add(new(x, y)); }
         _previewPoints = points;
+        var extent = points.Max(p => Math.Max(Math.Abs(p.Dx), Math.Abs(p.Dy)));
+        _previewScale = extent > 0 ? Math.Min(0.8, 95 / extent) : 0.8;
+        ToolTipService.SetToolTip(PreviewButton, $"Local preview: 1.5 seconds, fitted to the pad. 1 canvas pixel = {1 / _previewScale:0.##} input units.");
         PreviewText.Text = _preview ? "Pause preview" : "Preview";
         if (_preview && !_hidden && _system.AnimationsEnabled) _previewTimer.Start();
         DrawPad();
@@ -418,10 +478,10 @@ public sealed partial class MainWindow : Window
         {
             var trace = new Polyline { Stroke = vector, StrokeThickness = 1.6, Opacity = 0.45, StrokeDashArray = new DoubleCollection { 2, 3 } };
             trace.Points.Add(new Point(117, 117));
-            foreach (var p in _previewPoints) trace.Points.Add(new Point(117 + p.Dx * 0.8, 117 + p.Dy * 0.8));
+            foreach (var p in _previewPoints) trace.Points.Add(new Point(117 + p.Dx * _previewScale, 117 + p.Dy * _previewScale));
             PadCanvas.Children.Add(trace);
             var position = _previewPoints[_system.AnimationsEnabled ? _previewFrame : _previewPoints.Count - 1];
-            Dot(117 + position.Dx * 0.8, 117 + position.Dy * 0.8, 3.5, vector, null);
+            Dot(117 + position.Dx * _previewScale, 117 + position.Dy * _previewScale, 3.5, vector, null);
         }
         Dot(117, 117, 2.4, axes, null);
         Dot(hx, hy, 7, new SolidColorBrush(dark ? Color.FromArgb(255, 33, 37, 45) : Colors.White), vector);
@@ -436,8 +496,13 @@ public sealed partial class MainWindow : Window
     {
         CancelCapture(); _runtime.Invalidate();
         var model = new ComboBox { Header = "Motion model", HorizontalAlignment = HorizontalAlignment.Stretch };
-        model.Items.Add("Smooth"); model.Items.Add("Organic"); model.SelectedIndex = (int)Current.Motion.Model;
-        var rate = new NumberBox { Header = "Maximum component rate (relative input units/s)", Minimum = 1, Maximum = 1000, Value = Math.Clamp(Current.Motion.MaxComponentRate, 1, 1000), SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+        model.ItemsSource = Enum.GetValues<MotionModel>(); model.SelectedItem = Current.Motion.Model;
+        var description = new TextBlock { Text = MotionUi.Describe(Current.Motion.Model), TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 };
+        model.SelectionChanged += (_, _) => { if (model.SelectedItem is MotionModel selected) description.Text = MotionUi.Describe(selected); };
+        var range = new TextBlock { Text = "Axis range: −2000 to +2000 input units/s, step 1. Windows pointer settings affect screen speed.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 };
+        var rates = new[] { 125, 250, 500, 1000 };
+        var outputRate = new ComboBox { Header = "Requested output rate", ItemsSource = rates.Select(rate => $"{rate} Hz").ToArray(), SelectedIndex = Array.IndexOf(rates, _configuration.AppSettings.OutputRateHz), HorizontalAlignment = HorizontalAlignment.Stretch };
+        var timing = new TextBlock { Text = "Host scheduling target. Windows timing and Arduino acknowledgements can lower the effective rate.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 };
         var backend = new ComboBox { Header = "Input method", HorizontalAlignment = HorizontalAlignment.Stretch };
         backend.Items.Add("Windows (SendInput)"); backend.Items.Add("Arduino Leonardo (USB HID)");
         backend.SelectedIndex = (int)_configuration.AppSettings.InputBackend;
@@ -457,17 +522,26 @@ public sealed partial class MainWindow : Window
         backend.SelectionChanged += (_, _) => UpdatePortVisibility(); UpdatePortVisibility();
         var folder = new Button { Content = "Open data folder" };
         folder.Click += (_, _) => { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = _dataFolder, UseShellExecute = true }); } catch (Exception ex) { ShowNotice("Data folder could not be opened: " + ex.Message, InfoBarSeverity.Warning); } };
-        var panel = new StackPanel { Spacing = 14 }; foreach (var element in new UIElement[] { model, rate, backend, portPanel, folder }) panel.Children.Add(element);
+        using var licenseStream = typeof(MotionSettings).Assembly.GetManifestResourceStream("MouseControl.GhostCursorSharp.License");
+        using var licenseReader = licenseStream is null ? null : new StreamReader(licenseStream);
+        var license = new Expander { Header = "Third-party license", HorizontalAlignment = HorizontalAlignment.Stretch, Content = new TextBlock { Text = "GhostCursorSharp geometry\n\n" + (licenseReader?.ReadToEnd() ?? "See THIRD_PARTY_NOTICES.md in the repository."), TextWrapping = TextWrapping.Wrap, FontSize = 11 } };
+        var panel = new StackPanel { Spacing = 14 }; foreach (var element in new UIElement[] { model, description, range, outputRate, timing, backend, portPanel, folder, license }) panel.Children.Add(element);
         var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Settings", Content = new ScrollViewer { Content = panel, MaxHeight = 390 }, PrimaryButtonText = "Save", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
         dialog.PrimaryButtonClick += (_, args) =>
         {
-            if (!double.IsFinite(rate.Value) || rate.Value < 1 || rate.Value > 1000) args.Cancel = true;
             if (backend.SelectedIndex == 1 && !ProfileConfiguration.IsArduinoPortName(port.Text.Trim()))
             { port.Header = "Enter a COM port, for example COM5"; args.Cancel = true; }
         };
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
-            ReplaceProfile(Current with { Motion = Current.Motion with { Model = (MotionModel)model.SelectedIndex, MaxComponentRate = rate.Value } });
+            ReplaceProfile(Current with { Motion = Current.Motion with { Model = (MotionModel)model.SelectedItem } });
+            var requestedRate = rates[outputRate.SelectedIndex];
+            if (requestedRate != _configuration.AppSettings.OutputRateHz)
+            {
+                _runtime.SetOutputRateHz(requestedRate);
+                _configuration = _configuration with { AppSettings = _configuration.AppSettings with { OutputRateHz = requestedRate } };
+                MarkDirty();
+            }
             var kind = (InputBackendKind)backend.SelectedIndex;
             var selectedPort = kind == InputBackendKind.Arduino ? port.Text.Trim().ToUpperInvariant() : _configuration.AppSettings.ArduinoPort;
             if (kind != _configuration.AppSettings.InputBackend || selectedPort != _configuration.AppSettings.ArduinoPort)
@@ -506,14 +580,28 @@ public sealed partial class MainWindow : Window
         {
             SetVector(0.18, 0.42);
             ReplaceProfile(Current with { Motion = Current.Motion with { Humanization = 0.35 } });
-            if (HorizontalNumber.Value != 18 || VerticalNumber.Value != 42 || HumanSlider.Value != 35) throw new Exception("Slider synchronization failed.");
+            if (HorizontalNumber.Value != 360 || VerticalNumber.Value != 840 || HumanSlider.Value != 35) throw new Exception("Slider synchronization failed.");
             var original = Current.Id; AddProfile(Current); var created = Current.Id;
             if (created == original || _configuration.Profiles.Count != 2) throw new Exception("Profile creation failed.");
             SelectProfile(original);
             VerticalNumber.Value = -23;
-            if (Math.Abs(Current.Motion.Y + 0.23) > 1e-9) throw new Exception("Numeric field synchronization failed.");
+            if (Math.Abs(Current.Motion.Y + 23 / MotionUi.MaximumSpeed) > 1e-9) throw new Exception("Numeric field synchronization failed.");
+            HorizontalNumber.Value = 1501;
+            if (HorizontalSlider.Value != 1501 || Math.Abs(Current.Motion.X * MotionUi.MaximumSpeed - 1501) > 1e-9) throw new Exception("Expanded speed range or unit step failed.");
+            var beforeStep = Current.Motion.X;
+            HorizontalNumber.Value = 1502;
+            if (Math.Abs((Current.Motion.X - beforeStep) * MotionUi.MaximumSpeed - 1) > 1e-9) throw new Exception("One-unit speed increment failed.");
+            foreach (var choice in Enum.GetValues<MotionModel>())
+            {
+                ModelCombo.SelectedItem = choice;
+                if (Current.Motion.Model != choice) throw new Exception("Model selection failed.");
+            }
+            ModelCombo.SelectedItem = MotionModel.Wind;
+            PulseEffectCheck.IsChecked = CorrectionEffectCheck.IsChecked = true;
+            if (!Current.Motion.PulseOverlay || !Current.Motion.CorrectionsOverlay) throw new Exception("Effect composition failed.");
             Save();
-            if (!_store.Load().Success) throw new Exception("Profile roundtrip failed.");
+            var reloaded = _store.Load();
+            if (!reloaded.Success || reloaded.Configuration!.AppSettings != _configuration.AppSettings || !reloaded.Configuration.Profiles.SequenceEqual(_configuration.Profiles)) throw new Exception("Profile roundtrip failed.");
             _bridge.Hide(); OnHidden(); _bridge.Show(); OnShown();
             SetVector(0.18, 0.42);
             if (!FormatHotkey(new GlobalHotkey((int)VirtualKey.F8, HotkeyModifiers.Win)).StartsWith("Win + ", StringComparison.Ordinal)) throw new Exception("Hotkey display failed.");
@@ -525,6 +613,17 @@ public sealed partial class MainWindow : Window
             if (_runtime.Enabled || ArduinoStatus.Visibility != Visibility.Visible || ArduinoStatusText.Text != "Offline") throw new Exception("Disconnected Arduino must remain disabled.");
             if (!SelectInputBackend(InputBackendKind.Windows, "COM65535") || ArduinoStatus.Visibility != Visibility.Collapsed) throw new Exception("Windows backend restoration failed.");
             var captureHwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            ModelCombo.SelectedItem = MotionModel.Bezier;
+            ReplaceProfile(Current with { Motion = Current.Motion with { Humanization = 1 } });
+            foreach (var number in new[] { VerticalNumber, HorizontalNumber, HumanNumber })
+            {
+                number.Focus(FocusState.Keyboard);
+                await Task.Delay(100);
+                var clear = FindTemplatePart<Button>(number, "DeleteButton");
+                if (number.SpinButtonPlacementMode != NumberBoxSpinButtonPlacementMode.Hidden ||
+                    clear is null || clear.Width != 0 || clear.MinWidth != 0 || clear.Opacity != 0 || clear.IsHitTestVisible || clear.IsTabStop)
+                    throw new Exception("Numeric fields expose spin or clear buttons.");
+            }
             NativeScreenshot.RaiseForCapture(captureHwnd);
             var screenshot = System.IO.Path.ChangeExtension(output, ".png");
             try
@@ -534,7 +633,7 @@ public sealed partial class MainWindow : Window
                 await SaveScreenshot(capture.Pixels, capture.Width, capture.Height, screenshot);
             }
             finally { NativeScreenshot.RestoreAfterCapture(captureHwnd); }
-            File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = true, simulation = true, synchronizedControls = true, createdProfile = true, numericEdit = true, profileRoundtrip = true, offlineArduinoBlocked = true, windowsBackendRestored = true, trayAvailable = _bridge.TrayAvailable, screenshot }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = true, simulation = true, synchronizedControls = true, createdProfile = true, numericEdit = true, numericButtonsHidden = true, speedRange = MotionUi.MaximumSpeed, oneUnitStep = true, availableModels = Enum.GetNames<MotionModel>(), combinedEffects = true, profileRoundtrip = true, requestedOutputRate = _runtime.RequestedOutputRateHz, offlineArduinoBlocked = true, windowsBackendRestored = true, trayAvailable = _bridge.TrayAvailable, screenshot }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(output)!); File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = false, error = ex.ToString() })); }
         finally { Close(); }

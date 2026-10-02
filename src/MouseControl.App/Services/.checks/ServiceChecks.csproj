@@ -15,8 +15,11 @@
   <ItemGroup>
     <Compile Include="RuntimeChecks.txt" />
     <Compile Include="BackendChecks.txt" />
+    <Compile Include="MotionUiChecks.txt" />
     <Compile Include="../RuntimeService.cs" Link="RuntimeService.cs" />
     <Compile Include="../InputBackends.cs" Link="InputBackends.cs" />
+    <Compile Include="../MotionUi.cs" Link="MotionUi.cs" />
+    <Compile Include="../OutputScheduler.cs" Link="OutputScheduler.cs" />
     <Compile Include="../Arduino*.cs" Link="%(Filename).cs" />
     <Compile Include="../WindowBridge.cs" Link="WindowBridge.cs" />
     <Compile Include="../../Native.cs" Link="Native.cs" />

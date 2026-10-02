@@ -1,0 +1,36 @@
+using MouseControl.Core;
+using MouseControl.App.Services;
+
+internal static class MotionUiChecks
+{
+    public static void PreserveProfiles()
+    {
+        var old = ProfileConfiguration.CreateDefault();
+        var first = old.Profiles[0] with { Name = "Saved low speed", Motion = new(.53, -.27, .6, 150, MotionModel.Organic) };
+        var second = first with { Id = Guid.NewGuid(), Name = "Saved high speed", Color = "#AA55CC", Motion = new(-.9, .42, .85, 1000) };
+        old = old with { Profiles = new[] { first, second }, AppSettings = old.AppSettings with { ActiveProfileId = second.Id, InputBackend = InputBackendKind.Arduino, ArduinoPort = "COM7" } };
+        var converted = MotionUi.UseSpeedUnits(old, out var changed);
+        converted.Validate();
+        if (!changed || converted.AppSettings != old.AppSettings) throw new Exception("Application settings changed during speed conversion.");
+        for (var i = 0; i < old.Profiles.Count; i++)
+        {
+            var before = old.Profiles[i]; var after = converted.Profiles[i];
+            if ((before with { Motion = after.Motion }) != after) throw new Exception("Profile identity or metadata changed.");
+            if (Math.Abs(before.Motion.X * before.Motion.MaxComponentRate - after.Motion.X * after.Motion.MaxComponentRate) > 1e-9 ||
+                Math.Abs(before.Motion.Y * before.Motion.MaxComponentRate - after.Motion.Y * after.Motion.MaxComponentRate) > 1e-9 ||
+                before.Motion.Humanization != after.Motion.Humanization || before.Motion.Model != after.Motion.Model)
+                throw new Exception("Saved motion settings were reinterpreted.");
+        }
+        if (MotionUi.UseSpeedUnits(converted, out changed) != converted || changed) throw new Exception("Speed conversion is not idempotent.");
+        var path = Path.Combine(Path.GetTempPath(), "MouseControl-speed-migration-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var store = new ProfileStore(path);
+            if (!store.Save(converted).Success) throw new Exception("Converted profiles could not be saved.");
+            var reloaded = store.Load();
+            if (!reloaded.Success || reloaded.Configuration!.AppSettings != converted.AppSettings ||
+                !reloaded.Configuration.Profiles.SequenceEqual(converted.Profiles)) throw new Exception("Profiles changed across close/reopen storage boundary.");
+        }
+        finally { File.Delete(path); File.Delete(path + ".lock"); }
+    }
+}

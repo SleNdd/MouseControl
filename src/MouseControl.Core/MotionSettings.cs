@@ -4,8 +4,12 @@ namespace MouseControl.Core;
 
 public enum MotionModel
 {
-    Smooth,
-    Organic
+    Smooth = 0,
+    Organic = 1,
+    Wind = 2,
+    Pulse = 3,
+    Corrections = 4,
+    Bezier = 5
 }
 
 /// <summary>Immutable cursor motion parameters. Components are normalized; rates use relative input units/second.</summary>
@@ -14,7 +18,9 @@ public sealed record MotionSettings(
     [property: JsonRequired] double Y = 0,
     [property: JsonRequired] double Humanization = 0,
     [property: JsonRequired] double MaxComponentRate = 150,
-    [property: JsonRequired] MotionModel Model = MotionModel.Smooth)
+    [property: JsonRequired] MotionModel Model = MotionModel.Smooth,
+    bool PulseOverlay = false,
+    bool CorrectionsOverlay = false)
 {
     public void Validate()
     {
