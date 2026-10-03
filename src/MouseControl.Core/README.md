@@ -151,3 +151,19 @@ Motion checks cover all models, effect combinations, seeded reset, fixed-grid pa
 invariance, bounds/sign preservation, exact zero, stall reset, nonperiodic refresh timing,
 command-vector scaling, smooth onset, Classic's exact baseline at all strengths, independent
 Classic effects, full-strength pauses, and optional-field compatibility.
+
+After running the default publish script, verify the transformed Core directly:
+
+```powershell
+$protectedCore = (Resolve-Path 'src/MouseControl.App/obj/Release/net10.0-windows10.0.19041.0/win-x64/obfuscated-core/MouseControl.Core.dll').Path
+dotnet run --project tests/MouseControl.Core.Tests/MouseControl.Core.Tests.csproj -c Release `
+    "-p:ObfuscatedCorePath=$protectedCore" `
+    "-p:OutputPath=$PWD/artifacts/checks/protected-core-tests/" `
+    -p:IntermediateOutputPath=obj/protected/Release/ -- --protected
+```
+
+The regular harness has 26 checks. Artifact mode has 24: it retains all public behavior,
+persistence, and license checks, skips three checks that inspect original private field
+names, and adds verification of renamed private members and preserved public constructor
+parameters and enum identities. Native verification must additionally confirm that the
+single-file executable contains this transformed assembly.

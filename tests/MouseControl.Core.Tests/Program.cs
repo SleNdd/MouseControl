@@ -2,7 +2,8 @@ using System.Text.Json.Nodes;
 using System.Reflection;
 using MouseControl.Core;
 
-var tests = new (string Name, Action Run)[]
+var protectedMode = args.Contains("--protected", StringComparer.Ordinal);
+var tests = new List<(string Name, Action Run)>
 {
     ("seed reproducibility and reset", SeedReproducibility),
     ("zero humanization is seed/model independent", DeterministicBaseline),
@@ -27,16 +28,23 @@ var tests = new (string Name, Action Run)[]
     ("all models and overlays persist with optional compatibility", ModelPersistence),
     ("parameter refreshes evolve on nonperiodic bounded schedules", NonperiodicCadence),
     ("combined effects preserve motion invariants and pause together", CombinedEffects),
+    ("overlays preserve private base random streams", CombinedEffectPrivateStreams),
     ("Bezier signed geometry and segment stitching", BezierGeometry),
     ("embedded third-party license notices", EmbeddedLicenses)
 };
+if (protectedMode)
+{
+    tests.RemoveAll(test => test.Run == NonperiodicCadence || test.Run == BezierGeometry ||
+        test.Run == CombinedEffectPrivateStreams);
+    tests.Add(("protected private names and public serialization metadata", ProtectedMetadata));
+}
 var failed = 0;
 foreach (var test in tests)
 {
     try { test.Run(); Console.WriteLine($"PASS {test.Name}"); }
     catch (Exception ex) { failed++; Console.Error.WriteLine($"FAIL {test.Name}: {ex}"); }
 }
-Console.WriteLine($"{tests.Length - failed}/{tests.Length} behavior checks passed.");
+Console.WriteLine($"{tests.Count - failed}/{tests.Count} behavior checks passed.");
 return failed == 0 ? 0 : 1;
 
 static void Assert(bool condition, string message)
@@ -53,6 +61,38 @@ static void EmbeddedLicenses()
         using var reader = new StreamReader(stream!);
         Assert(reader.ReadToEnd().Contains("MIT License", StringComparison.Ordinal), "Embedded license text is incomplete.");
     }
+}
+
+static void ProtectedMetadata()
+{
+    var type = typeof(MotionGenerator);
+    Assert(type.GetField("_seed", BindingFlags.Instance | BindingFlags.NonPublic) is null,
+        "Protected Core retains the original private _seed name.");
+    Assert(type.GetMethod("NextVelocity", BindingFlags.Instance | BindingFlags.NonPublic) is null,
+        "Protected Core retains the original private NextVelocity name.");
+    AssertConstructorParameters(typeof(MotionSettings),
+        "X", "Y", "Humanization", "MaxComponentRate", "Model", "PulseOverlay", "CorrectionsOverlay");
+    AssertConstructorParameters(typeof(AppSettings),
+        "ToggleHotkey", "ActiveProfileId", "InputBackend", "ArduinoPort", "OutputRateHz", "StartInTray");
+    AssertEnumIdentities<MotionModel>(
+        ("Smooth", 0), ("Organic", 1), ("Wind", 2), ("Pulse", 3), ("Corrections", 4), ("Bezier", 5), ("Classic", 6));
+    AssertEnumIdentities<ActivationBinding>(
+        ("Lmb", 0), ("Rmb", 1), ("LmbAndRmb", 2), ("Mmb", 3), ("Alt", 4), ("Shift", 5));
+    AssertEnumIdentities<InputBackendKind>(("Windows", 0), ("Arduino", 1));
+    AssertEnumIdentities<HotkeyModifiers>(("None", 0), ("Alt", 1), ("Control", 2), ("Shift", 4), ("Win", 8));
+}
+
+static void AssertConstructorParameters(Type type, params string[] expected)
+{
+    Assert(type.GetConstructors().Any(constructor =>
+        constructor.GetParameters().Select(parameter => parameter.Name).SequenceEqual(expected)),
+        $"{type.Name} public record constructor parameter names changed.");
+}
+
+static void AssertEnumIdentities<T>(params (string Name, int Value)[] expected) where T : struct, Enum
+{
+    var actual = Enum.GetValues<T>().Select(value => (Name: value.ToString(), Value: Convert.ToInt32(value)));
+    Assert(actual.SequenceEqual(expected), $"{typeof(T).Name} enum names or numeric identities changed.");
 }
 
 static void Near(double actual, double expected, double tolerance = 1e-9) =>
@@ -651,6 +691,21 @@ static void CombinedEffects()
         for (var i = 0; i < 1000; i++)
         {
             distinct |= plain.Step(.01) != combined.Step(.01);
+        }
+        Assert(distinct, "Overlay combination did not affect output.");
+    }
+}
+
+static void CombinedEffectPrivateStreams()
+{
+    foreach (var model in new[] { MotionModel.Smooth, MotionModel.Organic, MotionModel.Wind, MotionModel.Bezier, MotionModel.Classic })
+    {
+        var settings = new MotionSettings(.23, .11, 1, Model: model);
+        var plain = new MotionGenerator(settings, 17);
+        var combined = new MotionGenerator(settings with { PulseOverlay = true, CorrectionsOverlay = true }, 17);
+        for (var i = 0; i < 1000; i++)
+        {
+            plain.Step(.01); combined.Step(.01);
             foreach (var field in new[] { "_speedNoise", "_sideNoise", "_speedTarget", "_sideTarget" })
                 Assert(State<double>(plain, field) == State<double>(combined, field), "Overlay changed base random stream.");
             if (model == MotionModel.Bezier)
@@ -659,7 +714,6 @@ static void CombinedEffects()
                     State<double>(plain, "_bezierSide") == State<double>(combined, "_bezierSide"), "Overlay changed Bezier random stream.");
             }
         }
-        Assert(distinct, "Overlay combination did not affect output.");
     }
 }
 

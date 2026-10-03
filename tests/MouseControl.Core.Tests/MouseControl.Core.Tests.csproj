@@ -6,7 +6,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
-  <ItemGroup>
+  <ItemGroup Condition="'$(ObfuscatedCorePath)' == ''">
     <ProjectReference Include="../../src/MouseControl.Core/MouseControl.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(ObfuscatedCorePath)' != ''">
+    <Reference Include="MouseControl.Core">
+      <HintPath>$(ObfuscatedCorePath)</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 </Project>

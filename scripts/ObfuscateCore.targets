@@ -1,0 +1,20 @@
+<Project>
+  <Target Name="ObfuscateCoreForBundle" BeforeTargets="GenerateSingleFileBundle" DependsOnTargets="PrepareForBundle"
+          Condition="'$(ObfuscateCore)' == 'true' and '$(Configuration)' == 'Release' and '$(PublishSingleFile)' == 'true'">
+    <ItemGroup>
+      <_CoreToObfuscate Include="@(FilesToBundle)" Condition="'%(FilesToBundle.Filename)%(FilesToBundle.Extension)' == 'MouseControl.Core.dll'" />
+    </ItemGroup>
+    <Error Condition="'@(_CoreToObfuscate->Count())' != '1'" Text="Exactly one Core assembly must enter the bundle." />
+    <Error Condition="!Exists('$(ObfuscarExecutable)')" Text="The configured Obfuscar executable is missing." />
+    <PropertyGroup>
+      <_CoreObfuscationOutput>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/$(IntermediateOutputPath)obfuscated-core'))</_CoreObfuscationOutput>
+    </PropertyGroup>
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Obfuscate-Core.ps1&quot; -Assembly &quot;%(_CoreToObfuscate.FullPath)&quot; -ToolPath &quot;$(ObfuscarExecutable)&quot; -OutputDirectory &quot;$(_CoreObfuscationOutput)&quot;" />
+    <ItemGroup>
+      <FilesToBundle Remove="@(_CoreToObfuscate)" />
+      <FilesToBundle Include="$(_CoreObfuscationOutput)/MouseControl.Core.dll">
+        <RelativePath>@(_CoreToObfuscate->'%(RelativePath)')</RelativePath>
+      </FilesToBundle>
+    </ItemGroup>
+  </Target>
+</Project>

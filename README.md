@@ -28,14 +28,25 @@ screen movement.
 
 ## Build
 
-Use Windows 11 x64 with the .NET 10 SDK. Run commands from the repository root.
+Use Windows 11 x64 with the .NET 10 SDK. Publishing also requires the .NET 8 runtime for
+the pinned Obfuscar build tool. Run commands from the repository root.
 
 ```powershell
 dotnet build src/MouseControl.App/MouseControl.App.csproj -c Release
 .\scripts\publish.ps1
 ```
 
-The publish script creates one self-contained Windows x64 executable. Start:
+The publish script creates one self-contained Windows x64 executable. By default it installs
+Obfuscar.GlobalTool 2.2.50 locally under `artifacts/tools` and obfuscates private Core
+implementation names before bundling. Public APIs, record constructor parameters, enum
+names, JSON fields, resources, and third-party notices are preserved. The WinUI application
+assembly is not transformed; string hiding is disabled. Compiler outputs remain unchanged.
+An obfuscation failure stops publishing instead of silently producing a plain build.
+
+For a plain development executable, use `.\scripts\publish.ps1 -Plain`. Obfuscation reports
+and name mappings stay in ignored build staging directories and are not included in the EXE.
+
+Start:
 
 ```powershell
 .\artifacts\MouseControl\MouseControl.exe
@@ -109,6 +120,9 @@ dotnet run --project src/MouseControl.App/Services/.checks/ServiceChecks.csproj 
 
 These check core behavior and isolated runtime paths. Native tray, hotkey, session, and input
 integration require separate Windows verification.
+
+The Core harness can also run against the transformed assembly. See the
+[artifact verification command](src/MouseControl.Core/README.md#behavioral-harness).
 
 Firmware was compiled with Arduino AVR Boards 1.8.8 and Mouse 1.0.1. Compile with Arduino
 CLI after installing those dependencies:

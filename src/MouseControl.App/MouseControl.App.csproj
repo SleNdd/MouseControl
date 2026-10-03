@@ -20,7 +20,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MouseControl</AssemblyName>
     <RootNamespace>MouseControl.App</RootNamespace>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Authors>SleNdd</Authors>
     <Company>SleNdd</Company>
     <Product>MouseControl</Product>
@@ -32,4 +32,5 @@
     <PackageReference Include="System.IO.Ports" Version="10.0.0" />
     <ProjectReference Include="../MouseControl.Core/MouseControl.Core.csproj" />
   </ItemGroup>
+  <Import Project="../../scripts/ObfuscateCore.targets" />
 </Project>
