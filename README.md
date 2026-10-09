@@ -54,6 +54,8 @@ Start:
 
 No separate .NET or Windows App SDK installation is needed. Embedded components extract
 to the user's runtime cache at launch. Settings are stored separately.
+The published EXE can be renamed while retaining the `.exe` extension. The resource index
+uses the standard `resources.pri` name inside the bundle, independently of the EXE filename.
 
 ## Use
 

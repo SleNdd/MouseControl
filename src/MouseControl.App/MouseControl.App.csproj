@@ -5,6 +5,8 @@
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
+    <!-- MRT also recognizes this common name after the published EXE is renamed. -->
+    <ProjectPriFileName>resources.pri</ProjectPriFileName>
     <EnableMsixTooling>true</EnableMsixTooling>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
@@ -20,7 +22,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MouseControl</AssemblyName>
     <RootNamespace>MouseControl.App</RootNamespace>
-    <Version>0.3.1</Version>
+    <Version>0.3.2</Version>
     <Authors>SleNdd</Authors>
     <Company>SleNdd</Company>
     <Product>MouseControl</Product>
