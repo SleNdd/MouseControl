@@ -105,6 +105,15 @@ Native tray, hotkey, session, and input integration require separate Windows ver
 
 ## Development checks
 
+`DesktopFeedbackSound` uses one worker-owned NAudio output and one PCM voice. A new event
+fades the current voice to zero over 6 ms, then starts the latest requested cue. Requests
+during that fade replace the pending cue without extending the fade. Idle output is silent.
+PCM generation has smooth attack/release and a continuous frequency glide. The worker owns
+device initialization, recovery and disposal; the UI only posts a latest-event request.
+The audio regression checks use rendered PCM and fake devices without opening speakers.
+To additionally play a short rapid sequence through the default Windows audio device and
+check playback progress and callback shutdown, append `-- --audio-smoke` to the command below.
+
 The service harness is excluded by the application's hidden-directory source glob:
 
 ```powershell

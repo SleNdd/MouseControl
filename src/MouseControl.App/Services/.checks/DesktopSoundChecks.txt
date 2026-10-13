@@ -1,0 +1,102 @@
+using System.Collections.Concurrent;
+using MouseControl.App.Services;
+
+internal static class DesktopSoundChecks
+{
+    private static void Assert(bool value, string message)
+    { if (!value) throw new InvalidOperationException(message); }
+    private static short[] Read(DesktopCueProvider provider, int samples)
+    {
+        var bytes = new byte[samples * 2];
+        Assert(provider.Read(bytes, 0, bytes.Length) == bytes.Length, "Short PCM read.");
+        var result = new short[samples]; Buffer.BlockCopy(bytes, 0, result, 0, bytes.Length); return result;
+    }
+
+    internal static void LatestCue()
+    {
+        var provider = new DesktopCueProvider();
+        Assert(Read(provider, 64).All(value => value == 0), "Idle is not silent.");
+        provider.Play(DesktopFeedbackKind.Enabled);
+        var enabled = DesktopCueProvider.CreateCue(660, 880, .10);
+        Assert(Read(provider, 1200).SequenceEqual(enabled.Take(1200)), "First cue altered.");
+        provider.Play(DesktopFeedbackKind.Adjustment);
+        var firstHalf = Read(provider, DesktopCueProvider.FadeSamples / 2);
+        for (var i = 0; i < 100; i++) provider.Play(DesktopFeedbackKind.Adjustment);
+        provider.Play(DesktopFeedbackKind.Disabled);
+        var rest = Read(provider, DesktopCueProvider.FadeSamples / 2 + 4800 + 128);
+        var fade = firstHalf.Concat(rest.Take(DesktopCueProvider.FadeSamples / 2)).ToArray();
+        for (var i = 0; i < fade.Length; i++)
+            Assert(fade[i] == (short)(enabled[1200 + i] * (fade.Length - i - 1) / (double)(fade.Length - 1)), "Old cue was mixed, cut, or fade restarted.");
+        var disabled = DesktopCueProvider.CreateCue(660, 440, .10);
+        Assert(rest.Skip(DesktopCueProvider.FadeSamples / 2).Take(disabled.Length).SequenceEqual(disabled), "Latest cue did not start immediately after fade.");
+        Assert(rest.TakeLast(128).All(value => value == 0), "An old pending cue replayed.");
+        foreach (var cue in new[] { enabled, disabled, DesktopCueProvider.CreateCue(900, 900, .065) })
+        {
+            Assert(cue[0] == 0 && cue[^1] == 0, "Envelope endpoints click.");
+            Assert(cue.All(value => Math.Abs((int)value) <= 4200), "PCM clips.");
+            Assert(cue.Zip(cue.Skip(1), (a, b) => Math.Abs(a - b)).Max() < 510, "PCM discontinuity.");
+        }
+        var a = new DesktopCueProvider(); var b = new DesktopCueProvider();
+        a.Play(DesktopFeedbackKind.Enabled); b.Play(DesktopFeedbackKind.Enabled);
+        Assert(Read(a, 5000).SequenceEqual(Read(b, 1000).Concat(Read(b, 4000))), "Render depends on driver block sizes.");
+    }
+
+    internal static void Worker()
+    {
+        using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim();
+        var seen = new ConcurrentQueue<DesktopFeedbackKind>();
+        var sink = new FakeAudio(kind => { seen.Enqueue(kind); if (seen.Count == 1) { entered.Set(); release.Wait(TimeSpan.FromSeconds(3)); } });
+        using (var sound = new DesktopFeedbackSound(() => sink))
+        {
+            sound.Play(DesktopFeedbackKind.Enabled); Assert(entered.Wait(TimeSpan.FromSeconds(3)), "Worker did not start.");
+            for (var i = 0; i < 1000; i++) sound.Play(DesktopFeedbackKind.Adjustment);
+            sound.Play(DesktopFeedbackKind.Disabled); release.Set();
+            Assert(SpinWait.SpinUntil(() => seen.Count == 2, 3000), "Latest event lost.");
+            sound.Dispose(); Assert(sound.Completion.Wait(3000), "Worker did not dispose.");
+            Assert(seen.SequenceEqual(new[] { DesktopFeedbackKind.Enabled, DesktopFeedbackKind.Disabled }), "Burst created a stale playlist.");
+            Assert(sink.Disposals == 1 && sink.DisposeThread != Environment.CurrentManagedThreadId, "Audio disposed on caller or repeatedly.");
+        }
+
+        using var failed = new ManualResetEventSlim(); var attempts = 0;
+        var recovered = new FakeAudio(_ => { });
+        using (var sound = new DesktopFeedbackSound(() => { if (Interlocked.Increment(ref attempts) == 1) { failed.Set(); throw new IOException("Device absent"); } return recovered; }))
+        {
+            sound.Play(DesktopFeedbackKind.Enabled); Assert(failed.Wait(3000), "Failure not reached.");
+            sound.Play(DesktopFeedbackKind.Disabled);
+            Assert(SpinWait.SpinUntil(() => recovered.Plays == 1, 3000), "Next event could not recover audio.");
+            sound.Dispose(); Assert(sound.Completion.Wait(3000), "Failed-device worker did not stop.");
+        }
+
+        entered.Reset(); release.Reset(); seen.Clear();
+        using (var sound = new DesktopFeedbackSound(() => new FakeAudio(kind => { seen.Enqueue(kind); entered.Set(); release.Wait(TimeSpan.FromSeconds(3)); })))
+        {
+            sound.Play(DesktopFeedbackKind.Enabled); Assert(entered.Wait(3000), "Blocking sink not entered.");
+            sound.Play(DesktopFeedbackKind.Disabled); sound.Dispose();
+            Assert(!sound.Completion.IsCompleted, "Shutdown did not retain the worker's active sink.");
+            release.Set(); Assert(sound.Completion.Wait(3000), "Blocked worker failed to finish.");
+            sound.Play(DesktopFeedbackKind.Adjustment);
+            Assert(seen.Count == 1, "Disposed worker replayed a pending cue.");
+        }
+    }
+
+    internal static void NativeOutput()
+    {
+        using var audio = new DesktopFeedbackAudio();
+        var output = (NAudio.Wave.WaveOutEvent)typeof(DesktopFeedbackAudio)
+            .GetField("_output", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(audio)!;
+        audio.Play(DesktopFeedbackKind.Enabled); Thread.Sleep(120);
+        var before = output.GetPosition();
+        for (var i = 0; i < 24; i++) { audio.Play((DesktopFeedbackKind)(i % 3)); Thread.Sleep(10); }
+        audio.Play(DesktopFeedbackKind.Disabled); Thread.Sleep(160);
+        Assert(output.GetPosition() > before, "Native device playback clock did not advance.");
+        var shutdown = Task.Run(audio.Dispose);
+        Assert(shutdown.Wait(3000), "Native callback shutdown did not complete.");
+    }
+
+    private sealed class FakeAudio(Action<DesktopFeedbackKind> play) : IDesktopFeedbackAudio
+    {
+        internal int Plays, Disposals, DisposeThread;
+        public void Play(DesktopFeedbackKind kind) { play(kind); Interlocked.Increment(ref Plays); }
+        public void Dispose() { DisposeThread = Environment.CurrentManagedThreadId; Interlocked.Increment(ref Disposals); }
+    }
+}

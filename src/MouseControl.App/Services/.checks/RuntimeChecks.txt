@@ -28,9 +28,12 @@ var tests = new (string Name, Action Run)[]
     ("obsolete reconnect cannot change current selection", BackendChecks.ReconnectIsolation),
     ("simulation cannot open serial", BackendChecks.SimulationIsolation),
     ("speed-unit migration preserves saved profile velocities", MotionUiChecks.PreserveProfiles),
-    ("two-model migration preserves metadata, effects and global settings", MotionUiChecks.SimpleModels)
+    ("two-model migration preserves metadata, effects and global settings", MotionUiChecks.SimpleModels),
+    ("audio latest event replaces a cue with bounded fade and no overlap", DesktopSoundChecks.LatestCue),
+    ("audio burst coalesces, disposal stays off the UI and device errors recover", DesktopSoundChecks.Worker)
 };
 if (OperatingSystem.IsWindows()) tests = tests.Append(("native hotkey routing, pair rollback and disposal", (Action)WindowsBridgeChecks.HotkeyRollback)).ToArray();
+if (args.Contains("--audio-smoke")) tests = tests.Append(("native audio burst, device progress and callback shutdown", (Action)DesktopSoundChecks.NativeOutput)).ToArray();
 var failures = 0;
 foreach (var test in tests)
 {

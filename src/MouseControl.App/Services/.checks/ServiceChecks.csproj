@@ -17,6 +17,8 @@
     <Compile Include="BackendChecks.txt" />
     <Compile Include="MotionUiChecks.txt" />
     <Compile Include="WindowsBridgeChecks.txt" />
+    <Compile Include="DesktopSoundChecks.txt" />
+    <Compile Include="../DesktopFeedbackSound.cs" Link="DesktopFeedbackSound.cs" />
     <Compile Include="../RuntimeService.cs" Link="RuntimeService.cs" />
     <Compile Include="../InputBackends.cs" Link="InputBackends.cs" />
     <Compile Include="../MotionUi.cs" Link="MotionUi.cs" />
@@ -26,6 +28,7 @@
     <Compile Include="../../Native.cs" Link="Native.cs" />
     <ProjectReference Include="../../../MouseControl.Core/MouseControl.Core.csproj" />
     <PackageReference Include="System.IO.Ports" Version="10.0.0" />
+    <PackageReference Include="NAudio.WinMM" Version="2.3.0" />
   </ItemGroup>
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
 </Project>

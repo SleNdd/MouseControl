@@ -1,31 +1,29 @@
-using System.Runtime.InteropServices;
 using System.Threading.Channels;
+using NAudio.Wave;
 
 namespace MouseControl.App.Services;
 
 internal enum DesktopFeedbackKind { Enabled, Disabled, Adjustment }
 
-/// <summary>Serializes short in-memory PCM cues; no files, device discovery or UI waits.</summary>
+/// <summary>Latest-event audio with one device and a short fade when replacing a cue.</summary>
 internal sealed class DesktopFeedbackSound : IDisposable
 {
     private readonly Channel<DesktopFeedbackKind> _queue = Channel.CreateBounded<DesktopFeedbackKind>(
-        new BoundedChannelOptions(3) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
+        new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
     private readonly CancellationTokenSource _stop = new();
+    private readonly Func<IDesktopFeedbackAudio> _createAudio;
     private readonly Task _worker;
-    private readonly Action<byte[]> _play;
     private int _disposed;
 
-    public DesktopFeedbackSound() : this(PlayMemoryWave) { }
-
-    // A deterministic sink permits queue/disposal checks without opening an audio device.
-    internal DesktopFeedbackSound(Action<byte[]> play)
+    public DesktopFeedbackSound() : this(() => new DesktopFeedbackAudio()) { }
+    internal DesktopFeedbackSound(Func<IDesktopFeedbackAudio> createAudio)
     {
-        _play = play;
+        ArgumentNullException.ThrowIfNull(createAudio);
+        _createAudio = createAudio;
         _worker = Task.Run(RunAsync);
     }
 
     internal Task Completion => _worker;
-
     public void Play(DesktopFeedbackKind kind)
     {
         if (kind is < DesktopFeedbackKind.Enabled or > DesktopFeedbackKind.Adjustment) return;
@@ -34,61 +32,145 @@ internal sealed class DesktopFeedbackSound : IDisposable
 
     private async Task RunAsync()
     {
+        IDesktopFeedbackAudio? audio = null;
         try
         {
-            var cues = new[] { CreateWave(660, 880), CreateWave(660, 440), CreateWave(900, 900, 0.075) };
             await foreach (var kind in _queue.Reader.ReadAllAsync(_stop.Token))
             {
                 if (_stop.IsCancellationRequested) break;
-                _play(cues[(int)kind]);
+                try { (audio ??= _createAudio()).Play(kind); }
+                catch (Exception)
+                {
+                    // A missing/disconnected device must not stop notifications or input.
+                    // A later event may reopen the default device; never replay old cues.
+                    ReleaseAudio();
+                }
             }
         }
         catch (OperationCanceledException) { }
-        finally { _stop.Dispose(); }
-    }
+        finally { ReleaseAudio(); _stop.Dispose(); }
 
-    private static void PlayMemoryWave(byte[] wave)
-    {
-        var pinned = GCHandle.Alloc(wave, GCHandleType.Pinned);
-        try
+        void ReleaseAudio()
         {
-            // SND_MEMORY | SND_NODEFAULT | SND_SYNC. The pinned buffer remains alive
-            // until playback returns. One worker prevents overlapping cues.
-            PlaySound(pinned.AddrOfPinnedObject(), 0, 0x0004 | 0x0002);
+            var previous = audio; audio = null;
+            try { previous?.Dispose(); } catch (Exception) { }
         }
-        finally { pinned.Free(); }
-    }
-
-    internal static byte[] CreateWave(double first, double second, double seconds = 0.14)
-    {
-        const int rate = 22050;
-        var count = (int)(rate * seconds);
-        using var stream = new MemoryStream(44 + count * 2);
-        using var writer = new BinaryWriter(stream);
-        writer.Write("RIFF"u8); writer.Write(36 + count * 2); writer.Write("WAVEfmt "u8);
-        writer.Write(16); writer.Write((short)1); writer.Write((short)1); writer.Write(rate);
-        writer.Write(rate * 2); writer.Write((short)2); writer.Write((short)16);
-        writer.Write("data"u8); writer.Write(count * 2);
-        double phase = 0;
-        for (var i = 0; i < count; i++)
-        {
-            var t = i / (double)count;
-            var envelope = Math.Min(1, t / 0.08) * Math.Min(1, (1 - t) / 0.22);
-            phase += 2 * Math.PI * (t < 0.5 ? first : second) / rate;
-            writer.Write((short)(Math.Sin(phase) * envelope * 4200));
-        }
-        return stream.ToArray();
     }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _queue.Writer.TryComplete();
-        // Cancellation is signalled before the worker disposes its source. Do not wait on
-        // the UI thread: an already-playing cue finishes in at most 140ms.
+        // The worker owns the device, including shutdown. Never block the UI on a driver.
         try { _stop.Cancel(); } catch (ObjectDisposedException) { }
     }
+}
 
-    [DllImport("winmm.dll", EntryPoint = "PlaySoundW")]
-    private static extern bool PlaySound(nint sound, nint module, uint flags);
+internal interface IDesktopFeedbackAudio : IDisposable
+{
+    void Play(DesktopFeedbackKind kind);
+}
+
+/// <summary>Created and disposed by the worker, independently of PlaySound's process slot.</summary>
+internal sealed class DesktopFeedbackAudio : IDesktopFeedbackAudio
+{
+    private readonly WaveOutEvent _output = new() { DesiredLatency = 30, NumberOfBuffers = 2 };
+    private readonly DesktopCueProvider _provider = new();
+    private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Exception? _failure;
+    private int _disposed;
+
+    public DesktopFeedbackAudio()
+    {
+        _output.PlaybackStopped += (_, args) =>
+        {
+            Volatile.Write(ref _failure, args.Exception ?? new InvalidOperationException("Audio playback stopped."));
+            _stopped.TrySetResult();
+        };
+        try { _output.Init(_provider); _output.Play(); }
+        catch { _output.Dispose(); throw; }
+    }
+
+    public void Play(DesktopFeedbackKind kind)
+    {
+        if (Volatile.Read(ref _failure) is { } failure) throw new InvalidOperationException("Audio device is unavailable.", failure);
+        _provider.Play(kind);
+    }
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        // WaveOutEvent.Dispose alone does not join its playback thread. This runs on our
+        // worker: stop, wait for the callback to exit Read/OnDone, then release its buffers.
+        try { _output.Stop(); }
+        finally
+        {
+            _stopped.Task.GetAwaiter().GetResult();
+            _output.Dispose();
+        }
+    }
+}
+
+/// <summary>One PCM voice. Replacement fades out the old voice before starting the newest cue.</summary>
+internal sealed class DesktopCueProvider : IWaveProvider
+{
+    internal const int SampleRate = 48000;
+    internal const int FadeSamples = SampleRate * 6 / 1000;
+    private static readonly short[][] Cues = [CreateCue(660, 880, .10), CreateCue(660, 440, .10), CreateCue(900, 900, .065)];
+    private readonly object _gate = new();
+    private short[] _current = [];
+    private short[]? _pending;
+    private int _position, _fadeLeft;
+    public WaveFormat WaveFormat { get; } = new(SampleRate, 16, 1);
+
+    internal void Play(DesktopFeedbackKind kind)
+    {
+        if (kind is < DesktopFeedbackKind.Enabled or > DesktopFeedbackKind.Adjustment) return;
+        lock (_gate)
+        {
+            _pending = Cues[(int)kind];
+            // More requests replace the pending cue without restarting an ongoing fade.
+            if (_fadeLeft == 0 && _position < _current.Length) _fadeLeft = FadeSamples;
+        }
+    }
+
+    public int Read(byte[] buffer, int offset, int count)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        if (offset < 0 || count < 0 || offset > buffer.Length - count || count % 2 != 0)
+            throw new ArgumentOutOfRangeException(nameof(count));
+        lock (_gate)
+        {
+            for (var i = offset; i < offset + count; i += 2)
+            {
+                if (_pending is not null && _fadeLeft == 0)
+                { _current = _pending; _pending = null; _position = 0; }
+                var sample = _position < _current.Length ? _current[_position++] : (short)0;
+                if (_fadeLeft > 0)
+                {
+                    var gain = (_fadeLeft - 1) / (double)(FadeSamples - 1);
+                    sample = (short)(sample * gain); _fadeLeft--;
+                }
+                buffer[i] = (byte)sample; buffer[i + 1] = (byte)(sample >> 8);
+            }
+        }
+        // Silence keeps the one device ready; old cues never form a delayed playlist.
+        return count;
+    }
+
+    internal static short[] CreateCue(double first, double second, double seconds)
+    {
+        var samples = new short[(int)(SampleRate * seconds)];
+        double phase = 0;
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var t = i / (double)(samples.Length - 1);
+            var attack = Math.Min(1, t / .12);
+            var release = Math.Min(1, (1 - t) / .25);
+            var envelope = Math.Pow(Math.Sin(attack * Math.PI / 2), 2) * Math.Pow(Math.Sin(release * Math.PI / 2), 2);
+            var glide = t * t * (3 - 2 * t);
+            phase += 2 * Math.PI * (first + (second - first) * glide) / SampleRate;
+            samples[i] = (short)(Math.Sin(phase) * envelope * 4200);
+        }
+        return samples;
+    }
 }

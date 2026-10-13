@@ -107,6 +107,8 @@ vertical speed. Change both bindings and the step in Settings. Values stay withi
 On/Off and vertical changes play short cues and show a small profile-colored panel at the
 left screen edge. Panels slide, stack, and expire. Sound and desktop notifications can be
 disabled independently. The underlined corner credit opens SleNdd's GitHub profile.
+Rapid actions replace the current sound after a six-millisecond fade. Only the latest
+pending cue is retained; older actions do not accumulate into a delayed sound sequence.
 
 A voluntary support prompt currently contains WIP text. Its close button unlocks after five
 seconds. It appears at each startup until **Don't ask again** is selected and saved.
