@@ -82,7 +82,7 @@ internal static class DesktopSoundChecks
     internal static void NativeOutput()
     {
         using var audio = new DesktopFeedbackAudio();
-        var output = (NAudio.Wave.WaveOutEvent)typeof(DesktopFeedbackAudio)
+        var output = (NAudio.Wave.WasapiOut)typeof(DesktopFeedbackAudio)
             .GetField("_output", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(audio)!;
         audio.Play(DesktopFeedbackKind.Enabled); Thread.Sleep(120);
         var before = output.GetPosition();

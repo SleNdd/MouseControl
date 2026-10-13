@@ -4,7 +4,7 @@ MouseControl is developed by **SleNdd**.
 
 ## NAudio audio playback
 
-Desktop notification playback uses NAudio.WinMM and NAudio.Core 2.3.0,
+Desktop notification playback uses NAudio.Wasapi and NAudio.Core 2.3.0,
 from [NAudio](https://github.com/naudio/NAudio/tree/v2.3.0), under the MIT license.
 Copyright 2020 Mark Heath. The full notice is retained in
 `src/MouseControl.App/ThirdParty/LICENSE.NAudio.txt`, embedded in the executable,

@@ -105,7 +105,7 @@ Native tray, hotkey, session, and input integration require separate Windows ver
 
 ## Development checks
 
-`DesktopFeedbackSound` uses one worker-owned NAudio output and one PCM voice. A new event
+`DesktopFeedbackSound` uses one worker-owned shared-mode WASAPI output and one PCM voice. A new event
 fades the current voice to zero over 6 ms, then starts the latest requested cue. Requests
 during that fade replace the pending cue without extending the fade. Idle output is silent.
 PCM generation has smooth attack/release and a continuous frequency glide. The worker owns

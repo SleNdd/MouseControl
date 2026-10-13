@@ -28,7 +28,7 @@
     <Compile Include="../../Native.cs" Link="Native.cs" />
     <ProjectReference Include="../../../MouseControl.Core/MouseControl.Core.csproj" />
     <PackageReference Include="System.IO.Ports" Version="10.0.0" />
-    <PackageReference Include="NAudio.WinMM" Version="2.3.0" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.3.0" />
   </ItemGroup>
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
 </Project>

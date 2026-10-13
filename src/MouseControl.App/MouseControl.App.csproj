@@ -32,7 +32,7 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <PackageReference Include="System.IO.Ports" Version="10.0.0" />
-    <PackageReference Include="NAudio.WinMM" Version="2.3.0" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.3.0" />
     <ProjectReference Include="../MouseControl.Core/MouseControl.Core.csproj" />
   </ItemGroup>
   <ItemGroup>

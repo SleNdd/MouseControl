@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace MouseControl.App.Services;
@@ -74,7 +75,7 @@ internal interface IDesktopFeedbackAudio : IDisposable
 /// <summary>Created and disposed by the worker, independently of PlaySound's process slot.</summary>
 internal sealed class DesktopFeedbackAudio : IDesktopFeedbackAudio
 {
-    private readonly WaveOutEvent _output = new() { DesiredLatency = 30, NumberOfBuffers = 2 };
+    private readonly WasapiOut _output = new(AudioClientShareMode.Shared, true, 30);
     private readonly DesktopCueProvider _provider = new();
     private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Exception? _failure;
@@ -99,8 +100,8 @@ internal sealed class DesktopFeedbackAudio : IDesktopFeedbackAudio
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        // WaveOutEvent.Dispose alone does not join its playback thread. This runs on our
-        // worker: stop, wait for the callback to exit Read/OnDone, then release its buffers.
+        // This runs on our worker. Stop joins WASAPI's render thread; the completion signal
+        // also covers playback that ended because of a device error before Stop was called.
         try { _output.Stop(); }
         finally
         {
