@@ -1,0 +1,62 @@
+using System.Runtime.InteropServices;
+using MouseControl.App;
+using MouseControl.App.Services;
+using MouseControl.Core;
+
+internal static class WindowsBridgeChecks
+{
+    private static readonly WindowProc Procedure = DefWindowProc;
+    internal static void HotkeyRollback()
+    {
+        var name = "MouseControl.Checks." + Guid.NewGuid().ToString("N");
+        var module = GetModuleHandle(null);
+        var definition = new WindowClass { Size = (uint)Marshal.SizeOf<WindowClass>(), Instance = module,
+            Procedure = Marshal.GetFunctionPointerForDelegate(Procedure), ClassName = name };
+        Require(RegisterClassEx(ref definition) != 0, "Test window class failed.");
+        nint owner = 0, blocker = 0;
+        try
+        {
+            owner = CreateWindowEx(0, name, "", 0, 0, 0, 0, 0, -3, 0, module, 0);
+            blocker = CreateWindowEx(0, name, "", 0, 0, 0, 0, 0, -3, 0, module, 0);
+            Require(owner != 0 && blocker != 0, "Test HWNDs failed.");
+            using var bridge = new WindowBridge(owner);
+            var modifiers = HotkeyModifiers.Control | HotkeyModifiers.Alt;
+            Require(bridge.TrySetHotkey(new(0x86, modifiers), out var toggleError), toggleError);
+            Require(bridge.TrySetVerticalHotkeys(new(0x85, modifiers), new(0x84, modifiers), out var error), error);
+            int toggles = 0, increases = 0, decreases = 0;
+            bridge.ToggleRequested += () => toggles++;
+            bridge.VerticalAdjustmentRequested += direction => { if (direction > 0) increases++; else decreases++; };
+            SendMessage(owner, 0x312, 0x5500, 0); SendMessage(owner, 0x312, 0x5600, 0); SendMessage(owner, 0x312, 0x5602, 0);
+            Require(toggles == 1 && increases == 1 && decreases == 1, "Hotkey routing failed.");
+            Require(Native.RegisterHotKey(blocker, 1001, (uint)modifiers | 0x4000, 0x83), "Cannot reserve blocking key.");
+            Require(!bridge.TrySetVerticalHotkeys(new(0x82, modifiers), new(0x83, modifiers), out _), "A conflicting second candidate was accepted.");
+            SendMessage(owner, 0x312, 0x5600, 0); SendMessage(owner, 0x312, 0x5602, 0); SendMessage(owner, 0x312, 0x5601, 0);
+            Require(increases == 2 && decreases == 2, "Failed update lost old routing or installed a partial pair.");
+            Require(Native.RegisterHotKey(blocker, 1002, (uint)modifiers | 0x4000, 0x82), "Failed update leaked its first candidate.");
+            Require(!bridge.TrySetHotkey(new(0x85, modifiers), out _), "Toggle reused a vertical chord.");
+            Require(!bridge.TrySetVerticalHotkeys(new(0x86, modifiers), new(0x84, modifiers), out _), "Vertical chord reused toggle.");
+            bridge.Dispose();
+            Require(Native.RegisterHotKey(blocker, 1003, (uint)modifiers | 0x4000, 0x85), "Dispose retained vertical registration.");
+        }
+        finally
+        {
+            if (blocker != 0) { foreach (var id in new[] { 1001, 1002, 1003 }) Native.UnregisterHotKey(blocker, id); DestroyWindow(blocker); }
+            if (owner != 0) DestroyWindow(owner);
+            UnregisterClass(name, module);
+        }
+    }
+    private static void Require(bool value, string message) { if (!value) throw new Exception(message); }
+    private delegate nint WindowProc(nint hwnd, uint message, nuint wparam, nint lparam);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct WindowClass
+    {
+        public uint Size, Style; public nint Procedure; public int ClassExtra, WindowExtra;
+        public nint Instance, Icon, Cursor, Background; public string? MenuName, ClassName; public nint SmallIcon;
+    }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern nint GetModuleHandle(string? name);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern ushort RegisterClassEx(ref WindowClass definition);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool UnregisterClass(string name, nint instance);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint CreateWindowEx(uint extended, string cls, string title, uint style, int x, int y, int width, int height, nint parent, nint menu, nint instance, nint param);
+    [DllImport("user32.dll")] private static extern bool DestroyWindow(nint hwnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint SendMessage(nint hwnd, uint message, nuint wparam, nint lparam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint DefWindowProc(nint hwnd, uint message, nuint wparam, nint lparam);
+}

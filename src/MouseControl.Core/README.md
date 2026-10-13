@@ -123,6 +123,11 @@ not itself open a connection or enable motion.
 `outputRateHz` is optional in older files, defaults to 1000, and must be 125, 250, 500, or 1000.
 `startInTray` is optional in older files and defaults to false. It is a window startup
 preference; enabled/armed state remains transient and always starts disabled.
+`verticalIncreaseHotkey` and `verticalDecreaseHotkey` are optional/nullable. Missing or null
+values use Ctrl + Shift + Up/Down. `verticalStep` defaults to 50 and accepts whole values 1–2000.
+`closeToTray`, `soundNotifications`, and `desktopNotifications` are optional and default to
+true. `suppressDonationPrompt` defaults to false. These remain version-one optional fields;
+older application versions that reject unknown fields cannot read a newly saved document.
 `pulseOverlay` and `correctionsOverlay` are optional when reading older motion settings and
 default to false. All seven model names and both overlay flags roundtrip in version 1.
 
@@ -162,7 +167,7 @@ dotnet run --project tests/MouseControl.Core.Tests/MouseControl.Core.Tests.cspro
     -p:IntermediateOutputPath=obj/protected/Release/ -- --protected
 ```
 
-The regular harness has 26 checks. Artifact mode has 24: it retains all public behavior,
+The regular harness has 27 checks. Artifact mode has 25: it retains all public behavior,
 persistence, and license checks, skips three checks that inspect original private field
 names, and adds verification of renamed private members and preserved public constructor
 parameters and enum identities. Native verification must additionally confirm that the

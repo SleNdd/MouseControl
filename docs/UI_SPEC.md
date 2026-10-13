@@ -1,11 +1,11 @@
 # MouseControl: UI and interaction specification
 
-Author: **SleNdd**. Date: **2026-10-03**.
+Author: **SleNdd**. Date: **2026-10-13**.
 
 ## Window and appearance
 
 The initial window target is **720 × 500 effective pixels**, scaled for Windows DPI. The window
-is resizable and uses native window controls. The direction pad is **236 × 236**. The layout
+is fixed in size and uses native window controls. The direction pad is **236 × 236**. The layout
 uses Segoe UI, Fluent controls, modest rounding, and Desktop Acrylic with Windows-managed
 material fallback.
 
@@ -13,13 +13,15 @@ Follow Windows light/dark appearance and system accent changes. Sliders and the 
 drawing use the accent; profile colors remain independent markers. Text, controls, and the
 direction handle stay opaque. Reduced-animation settings leave a static preview trace.
 
-All interface text is English. The corner credit is **prod. by SleNdd**.
+All interface text is English. The underlined corner link **prod. by SleNdd** opens
+`https://github.com/SleNdd` and uses readable theme foreground colors.
 
 ## Profiles
 
 Browser-style tabs show a name, color marker, selected state, and close affordance. Long names
 are shortened visually and remain available in a tooltip. The trailing **+** creates a profile
-from the current settings with a new ID and generated name.
+from the current settings with a new ID, generated name, and new random color.
+Dragging changes the stored order without changing profile IDs or restarting an active profile.
 
 Double-click a tab or select **Edit name and color** in its context menu to open the editor.
 Names must be nonempty; colors are opaque RGB values. The context menu also offers
@@ -135,5 +137,23 @@ Click or double-click the icon to show the window. Right-click opens a native me
 - **Exit**
 
 Opening and closing the menu invalidate the current activation hold. Explorer restart
-recreates the icon. The title-bar close button and tray **Exit** stop output, save pending
-settings, and close the application.
+recreates the icon. The icon remains present while the main window is visible.
+The title-bar close button saves and hides to the tray by default. Settings can disable this
+behavior. Tray **Exit** stops output, saves pending settings, and closes the application.
+
+## Feedback and support prompt
+
+Settings contain **Vertical +**, **Vertical −**, and a step of 1–2000 units/s (default 50).
+The default chords are Ctrl + Shift + Up/Down. These adjust the signed vertical value within
+the existing range and rearm motion after the edit. Key capture pauses motion; conflicts or
+registration failures preserve previous bindings.
+
+On/Off and vertical changes produce distinct sound cues and profile-colored panels. Panels
+are 220 × 54 effective pixels, flush to the current screen's left edge, 72 effective pixels
+below the work area's top. A tinted surface, fine border, narrow shadow, and transparency
+follow dark/light appearance. Panels slide and stack downwards, with up to four visible.
+They do not take focus or intercept clicks. Both sounds and panels can be disabled.
+
+The voluntary support dialog currently contains WIP text. Close and Escape are unavailable
+for five seconds after it opens. It appears on every startup until the persisted **Don't ask
+again** preference is selected. It does not contain a payment action.

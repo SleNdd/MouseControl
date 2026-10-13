@@ -3,7 +3,7 @@
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <Grid Grid.Row="0" Margin="14,4,18,0" ColumnSpacing="12">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <TabView x:Name="ProfileTabs" Height="44" IsAddTabButtonVisible="True" CanDragTabs="False" CanReorderTabs="False" TabWidthMode="SizeToContent" AddTabButtonClick="AddProfile_Click" TabCloseRequested="Profile_CloseRequested" SelectionChanged="Profile_SelectionChanged"/>
+      <TabView x:Name="ProfileTabs" Height="44" IsAddTabButtonVisible="True" CanDragTabs="True" CanReorderTabs="True" TabDragStarting="Profile_TabDragStarting" TabDragCompleted="Profile_TabDragCompleted" TabWidthMode="SizeToContent" AddTabButtonClick="AddProfile_Click" TabCloseRequested="Profile_CloseRequested" SelectionChanged="Profile_SelectionChanged"/>
       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
         <ToggleSwitch x:Name="EnabledSwitch" OnContent="Enabled" OffContent="Enabled" Toggled="Enabled_Toggled" AutomationProperties.Name="Enable cursor movement"/>
         <TextBlock x:Name="StatusText" Text="Disabled" VerticalAlignment="Center" FontSize="12" Opacity="0.7"/>
@@ -71,7 +71,9 @@
           <TextBlock x:Name="ArduinoStatusText" Text="Offline" FontSize="11"/>
         </StackPanel>
       </StackPanel>
-      <TextBlock Text="prod. by SleNdd" FontSize="11" Opacity="0.7" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+      <HyperlinkButton NavigateUri="https://github.com/SleNdd" Foreground="{ThemeResource TextFillColorPrimaryBrush}" FontSize="11" Padding="0" MinHeight="24" HorizontalAlignment="Right" VerticalAlignment="Center" ToolTipService.ToolTip="Open SleNdd on GitHub" AutomationProperties.Name="prod. by SleNdd — GitHub">
+        <TextBlock Text="prod. by SleNdd" TextDecorations="Underline" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+      </HyperlinkButton>
     </Grid>
   </Grid>
 </Window>

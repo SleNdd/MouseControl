@@ -12,7 +12,7 @@ public partial class App : Application
     {
         bool smoke = false;
 #if DEBUG
-        smoke = Environment.GetCommandLineArgs().Contains("--smoke-test");
+        smoke = Environment.GetCommandLineArgs().Contains("--smoke-test") || Environment.GetCommandLineArgs().Contains("--ui-check");
 #endif
         _instance = new Mutex(true, smoke ? "SleNdd.MouseControl.Smoke" : "SleNdd.MouseControl", out bool first);
         if (!first)

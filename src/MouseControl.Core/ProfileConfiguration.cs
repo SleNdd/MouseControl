@@ -18,7 +18,18 @@ public sealed record AppSettings(
     InputBackendKind InputBackend = InputBackendKind.Windows,
     string ArduinoPort = "",
     int OutputRateHz = 1000,
-    bool StartInTray = false);
+    bool StartInTray = false,
+    GlobalHotkey? VerticalIncreaseHotkey = null,
+    GlobalHotkey? VerticalDecreaseHotkey = null,
+    int VerticalStep = 50,
+    bool CloseToTray = true,
+    bool SoundNotifications = true,
+    bool DesktopNotifications = true,
+    bool SuppressDonationPrompt = false)
+{
+    [JsonIgnore] public GlobalHotkey EffectiveVerticalIncreaseHotkey => VerticalIncreaseHotkey ?? new(0x26, HotkeyModifiers.Control | HotkeyModifiers.Shift);
+    [JsonIgnore] public GlobalHotkey EffectiveVerticalDecreaseHotkey => VerticalDecreaseHotkey ?? new(0x28, HotkeyModifiers.Control | HotkeyModifiers.Shift);
+}
 
 public sealed record Profile(
     [property: JsonRequired] Guid Id,
@@ -65,6 +76,11 @@ public sealed record ProfileConfiguration(
         const HotkeyModifiers all = HotkeyModifiers.Alt | HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.Win;
         if ((AppSettings.ToggleHotkey.Modifiers & ~all) != 0)
             throw new ArgumentException("Toggle hotkey contains unsupported modifiers.");
+        foreach (var hotkey in new[] { AppSettings.EffectiveVerticalIncreaseHotkey, AppSettings.EffectiveVerticalDecreaseHotkey })
+            if (hotkey.VirtualKey is < 1 or > 254 || (hotkey.Modifiers & ~all) != 0)
+                throw new ArgumentException("Vertical hotkeys require valid Windows keys and modifiers.");
+        if (AppSettings.VerticalStep is < 1 or > 2000)
+            throw new ArgumentException("Vertical step must be between 1 and 2000 input units/s.");
         if (Profiles is null || Profiles.Count == 0)
             throw new ArgumentException("At least one profile is required.");
         var ids = new HashSet<Guid>();

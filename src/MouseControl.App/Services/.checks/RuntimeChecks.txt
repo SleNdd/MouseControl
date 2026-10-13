@@ -30,6 +30,7 @@ var tests = new (string Name, Action Run)[]
     ("speed-unit migration preserves saved profile velocities", MotionUiChecks.PreserveProfiles),
     ("two-model migration preserves metadata, effects and global settings", MotionUiChecks.SimpleModels)
 };
+if (OperatingSystem.IsWindows()) tests = tests.Append(("native hotkey routing, pair rollback and disposal", (Action)WindowsBridgeChecks.HotkeyRollback)).ToArray();
 var failures = 0;
 foreach (var test in tests)
 {

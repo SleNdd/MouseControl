@@ -75,6 +75,10 @@ one command is outstanding; each MOVE chunk waits for its ACK before the next ch
 components are segmented to ±127, with at most two chunks per tick. STOP is an acknowledged
 ordering barrier. Disabling and backend switching serialize with these operations.
 
+Before identification, a newly opened connection holds DTR low for 300 ms at 115200 baud,
+clears both buffers, then raises DTR. This gives the firmware loop time to discard its previous
+session, including a prior USB-send wait. It does not use Leonardo's 1200-baud bootloader touch.
+
 A failed/uncertain Arduino command closes the connection, disables output, and retains the
 offline Arduino selection. It is never retransmitted automatically: a missing ACK cannot
 establish whether an already-written MOVE executed. A firmware ACK reports command handling,
@@ -87,6 +91,9 @@ rooted subclass delegate, hotkey registrations, WTS registration, and tray icon.
 IDI_APPLICATION icon requires no DestroyIcon. Menus are destroyed in a finally block. Global
 hotkey updates register a distinct candidate with MOD_NOREPEAT before removing the old one;
 failure preserves the old binding. Tray menus publish suspension on both open and close.
+Vertical bindings use a separate pair of candidate IDs; both candidates must register before
+either previous mapping is replaced. Registration failure removes candidates and leaves the
+previous pair active. Duplicate toggle/vertical chords are rejected.
 Session lock/disconnect and power suspension publish suspension; resume requires fresh input.
 Explorer restart recreates the icon. `Hide()` refuses when the tray is unavailable.
 Native visibility requests perform the change and then publish `ShowRequested`/`HideRequested`

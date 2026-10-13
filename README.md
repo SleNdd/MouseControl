@@ -13,10 +13,13 @@ and .NET 10.
 - Requested host output rates of 125, 250, 500, or 1000 Hz.
 - Hold-to-activate bindings: LMB, RMB, LMB + RMB, MMB, Alt, or Shift.
 - A master enable switch and configurable global toggle hotkey; the default is F8.
-- Profile tabs with editable names and colors, duplication, deletion, and Undo.
+- Reorderable profile tabs with editable names, random colors for new tabs, duplication,
+  deletion, and Undo.
 - Desktop Acrylic, Windows light/dark appearance, and system accent colors.
 - A notification-area menu for showing the window, enabling motion, selecting a profile,
-  and exiting, plus optional startup in the tray.
+  and exiting, plus optional startup in the tray and close-to-tray behavior.
+- Compact color-coded desktop notifications and sound cues for On/Off and vertical changes.
+- Configurable vertical-adjustment hotkeys and step, defaulting to 50 input units/second.
 - Windows relative input or Arduino Leonardo USB HID output, with an Arduino-only
   Online/Offline indicator and reconnection while offline.
 
@@ -87,13 +90,26 @@ acknowledgements affect the effective output rate. See [motion models](docs/MOTI
 Use **+** to create a profile from the current settings. Double-click a tab or use its context
 menu to edit its name/color; the context menu also offers duplication. Closing a profile tab
 offers Undo and always leaves at least one profile.
+Drag tabs to change their saved order. Every new or duplicated profile gets a new random color.
 
 Click the toggle-key button to capture a new hotkey. Escape cancels; its own binding is
 available from the button's context menu. A failed registration
 keeps the previous binding. Minimize or use the tray button to hide the window; click the
-tray icon to restore it. The window close button and tray **Exit** stop the application.
+tray icon to restore it. The tray icon is present while the main window is visible too.
+The window close button hides to the tray by default; turn off **Close button minimizes to
+tray** in Settings to make it exit. Tray **Exit** always stops the application.
 **Settings → Start in tray** remembers the startup preference. If the notification icon
 cannot be created, the window stays visible. Startup always leaves movement disabled.
+The window is fixed at 720 × 500 effective pixels, scaled for Windows DPI.
+
+**Ctrl + Shift + Up/Down** add/subtract the vertical step from the active profile's signed
+vertical speed. Change both bindings and the step in Settings. Values stay within ±2000.
+On/Off and vertical changes play short cues and show a small profile-colored panel at the
+left screen edge. Panels slide, stack, and expire. Sound and desktop notifications can be
+disabled independently. The underlined corner credit opens SleNdd's GitHub profile.
+
+A voluntary support prompt currently contains WIP text. Its close button unlocks after five
+seconds. It appears at each startup until **Don't ask again** is selected and saved.
 
 Settings are saved under `%LOCALAPPDATA%\MouseControl`. Invalid existing settings are
 preserved, and save/load errors appear in the window.
@@ -104,6 +120,10 @@ Follow the [firmware installation guide](firmware/MouseControlLeonardo/README.md
 **Settings → Input method → Arduino Leonardo (USB HID)**, select the COM port, and Save.
 Offline discovery checks the selected port every two seconds. Once firmware identification
 succeeds, the indicator turns green and discovery stops. No idle heartbeat is sent.
+Each new serial connection holds DTR low for 300 ms at 115200 baud, clears stale bytes, then
+identifies the firmware with a fresh session. Selecting another COM port commits that port
+explicitly; connection errors remain visible in the UI. No firmware update is needed for this
+host-side reconnection change.
 
 USB removal notifications and command failures return the backend to Offline and disable
 motion. Reconnection requires enabling motion again. Online describes the established

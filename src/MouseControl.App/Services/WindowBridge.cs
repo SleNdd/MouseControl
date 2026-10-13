@@ -19,6 +19,7 @@ public sealed class WindowBridge : IDisposable
     private bool _subclassInstalled, _sessionNotifications, _disposed, _sessionBlocked, _powerBlocked;
     private GlobalHotkey? _hotkey;
     private int _hotkeyId;
+    private readonly Dictionary<bool, (GlobalHotkey Key, int Id)> _verticalHotkeys = new();
     private bool _enabled;
     private string _status = "Disabled";
     private Profile[] _profiles = Array.Empty<Profile>();
@@ -54,6 +55,7 @@ public sealed class WindowBridge : IDisposable
     public event Action? ShowRequested;
     public event Action? HideRequested;
     public event Action? ToggleRequested;
+    public event Action<int>? VerticalAdjustmentRequested;
     public event Action? ExitRequested;
     public event Action<Guid>? ProfileRequested;
     public event Action<bool>? SessionSuspended;
@@ -77,6 +79,8 @@ public sealed class WindowBridge : IDisposable
         if (hotkey.VirtualKey == 0x7B)
         { error = "F12 is reserved by Windows for the debugger."; return false; }
         if (_hotkey == hotkey) return true;
+        if (_verticalHotkeys.Values.Any(binding => binding.Key == hotkey))
+        { error = "This key is already used for vertical adjustment."; return false; }
         var candidateId = _hotkeyId == 0x5500 ? 0x5501 : 0x5500;
         if (_registeredHotkeys.Contains(candidateId))
         {
@@ -115,6 +119,50 @@ public sealed class WindowBridge : IDisposable
         }
     }
 
+    public bool TrySetVerticalHotkeys(GlobalHotkey increase, GlobalHotkey decrease, out string error)
+    {
+        VerifyOwnerThread();
+        error = "";
+        if (_disposed || !_subclassInstalled) { error = "Window hotkey integration is unavailable."; return false; }
+        if (increase == decrease || increase == _hotkey || decrease == _hotkey)
+        { error = "Toggle, increase and decrease must use different keys."; return false; }
+        foreach (var key in new[] { increase, decrease })
+            if (key.VirtualKey is < 1 or > 254 or 0x10 or 0x11 or 0x12 or 0x5B or 0x5C or 0x7B ||
+                (key.Modifiers & ~(HotkeyModifiers.Alt | HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.Win)) != 0)
+            { error = "Choose a key other than a modifier or reserved F12."; return false; }
+        var candidates = new Dictionary<bool, (GlobalHotkey Key, int Id)>();
+        foreach (var (increaseSlot, key) in new[] { (true, increase), (false, decrease) })
+        {
+            if (_verticalHotkeys.TryGetValue(increaseSlot, out var current) && current.Key == key) continue;
+            var firstId = increaseSlot ? 0x5600 : 0x5602;
+            var id = current.Id == firstId ? firstId + 1 : firstId;
+            if (_registeredHotkeys.Contains(id))
+            {
+                if (!Native.UnregisterHotKey(_hwnd, id))
+                { error = "A prior binding could not be released."; ReleaseCandidates(); return false; }
+                _registeredHotkeys.Remove(id);
+            }
+            if (!Native.RegisterHotKey(_hwnd, id, (uint)key.Modifiers | 0x4000, (uint)key.VirtualKey))
+            {
+                error = $"Key is reserved or already in use (Windows error {Marshal.GetLastWin32Error()}); previous bindings remain active.";
+                ReleaseCandidates(); return false;
+            }
+            _registeredHotkeys.Add(id); candidates.Add(increaseSlot, (key, id));
+        }
+        foreach (var (slot, candidate) in candidates)
+        {
+            _verticalHotkeys.TryGetValue(slot, out var previous);
+            _verticalHotkeys[slot] = candidate;
+            if (previous.Id != 0 && Native.UnregisterHotKey(_hwnd, previous.Id)) _registeredHotkeys.Remove(previous.Id);
+        }
+        return true;
+        void ReleaseCandidates()
+        {
+            foreach (var candidate in candidates.Values)
+                if (Native.UnregisterHotKey(_hwnd, candidate.Id)) _registeredHotkeys.Remove(candidate.Id);
+        }
+    }
+
     public void Hide()
     {
         VerifyOwnerThread();
@@ -138,6 +186,7 @@ public sealed class WindowBridge : IDisposable
         foreach (var id in _registeredHotkeys) Native.UnregisterHotKey(_hwnd, id);
         _registeredHotkeys.Clear();
         _hotkey = null;
+        _verticalHotkeys.Clear();
         Native.Shell_NotifyIcon(2, ref _icon);
         TrayAvailable = false;
         if (_sessionNotifications) Native.WTSUnRegisterSessionNotification(_hwnd);
@@ -171,11 +220,15 @@ public sealed class WindowBridge : IDisposable
                     var limits = Marshal.PtrToStructure<Native.MinMaxInfo>(lparam);
                     var scale = Native.GetDpiForWindow(hwnd) / 96.0;
                     limits.MinimumTrack = new Native.Point { X = (int)(720 * scale), Y = (int)(500 * scale) };
+                    limits.MaximumTrack = limits.MinimumTrack;
                     Marshal.StructureToPtr(limits, lparam, false);
                     return result;
                 }
                 if (message == Native.WmHotkey && (int)wparam == _hotkeyId && _hotkey is not null)
                 { Invoke(ToggleRequested); return 0; }
+                if (message == Native.WmHotkey)
+                    foreach (var (increase, binding) in _verticalHotkeys)
+                        if ((int)wparam == binding.Id) { Invoke(VerticalAdjustmentRequested, increase ? 1 : -1); return 0; }
                 if (message == Native.TrayMessage)
                 {
                     var notification = (uint)((nuint)lparam & 0xffff);

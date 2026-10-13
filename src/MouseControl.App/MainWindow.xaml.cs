@@ -38,6 +38,11 @@ public sealed partial class MainWindow : Window
     private IReadOnlyList<MotionDelta> _previewPoints = Array.Empty<MotionDelta>();
     private double _previewScale = 0.8;
     private readonly bool _smoke;
+    private readonly bool _interactiveCheck;
+    private DesktopFeedbackService? _feedback;
+    private bool _feedbackInitialized, _feedbackEnabled, _dialogOpen, _exitRequested;
+    private Guid _feedbackProfileId;
+    private string? _connectionError;
     private readonly string _dataFolder;
     private string? _initialError;
     private new Profile Current => _configuration.Profiles.First(p => p.Id == _configuration.AppSettings.ActiveProfileId);
@@ -45,8 +50,16 @@ public sealed partial class MainWindow : Window
     public MainWindow(bool smoke)
     {
         _smoke = smoke;
+        _interactiveCheck = false;
+#if DEBUG
+        _interactiveCheck = Environment.GetCommandLineArgs().Contains("--ui-check");
+#endif
         _dataFolder = smoke ? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "MouseControl-smoke-" + Guid.NewGuid().ToString("N"))
             : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MouseControl");
+#if DEBUG
+        if (smoke && Environment.GetEnvironmentVariable("MOUSECONTROL_SMOKE_DATA_FOLDER") is { Length: > 0 } checkFolder)
+            _dataFolder = System.IO.Path.GetFullPath(checkFolder);
+#endif
         Directory.CreateDirectory(_dataFolder);
         _store = new ProfileStore(System.IO.Path.Combine(_dataFolder, "profiles.json"));
         var loaded = _store.Load();
@@ -65,7 +78,7 @@ public sealed partial class MainWindow : Window
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var scale = Native.GetDpiForWindow(hwnd) / 96.0;
         AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(720 * scale), (int)(500 * scale)));
-        if (AppWindow.Presenter is OverlappedPresenter presenter) presenter.IsMaximizable = false;
+        if (AppWindow.Presenter is OverlappedPresenter presenter) { presenter.IsMaximizable = false; presenter.IsResizable = false; }
         _runtime = new RuntimeService(smoke);
         _runtime.SetOutputRateHz(_configuration.AppSettings.OutputRateHz);
         _runtime.SetProfile(Current);
@@ -74,15 +87,18 @@ public sealed partial class MainWindow : Window
         if (_configuration.AppSettings.InputBackend == InputBackendKind.Arduino)
             _runtime.SelectBackendDisconnected(InputBackendKind.Arduino, _configuration.AppSettings.ArduinoPort, out _);
         _bridge = new WindowBridge(hwnd);
+        if (!_smoke || _interactiveCheck) _feedback = new DesktopFeedbackService(DispatcherQueue, hwnd);
         _bridge.ShowRequested += OnShown;
         _bridge.HideRequested += OnHidden;
         _bridge.ToggleRequested += () => { CancelCapture(); _runtime.SetEnabled(!_runtime.Enabled); RefreshStatus(); };
+        _bridge.VerticalAdjustmentRequested += AdjustVertical;
         _bridge.ExitRequested += RequestExit;
         _bridge.ProfileRequested += SelectProfile;
         _bridge.SessionSuspended += suspended => { _sessionSuspended = suspended; ApplySuspension(); };
         _bridge.AvailabilityChanged += error => { ShowNotice(error, InfoBarSeverity.Warning); if (!_bridge.TrayAvailable) OnShown(); };
         _bridge.DevicesChanged += () => DispatcherQueue.TryEnqueue(CheckDeviceChange);
-        if (!_smoke && !_bridge.TrySetHotkey(_configuration.AppSettings.ToggleHotkey, out var hotkeyError)) _initialError = hotkeyError;
+        if ((!_smoke || _interactiveCheck) && !_bridge.TrySetHotkey(_configuration.AppSettings.ToggleHotkey, out var hotkeyError)) _initialError = hotkeyError;
+        if ((!_smoke || _interactiveCheck) && !_bridge.TrySetVerticalHotkeys(_configuration.AppSettings.EffectiveVerticalIncreaseHotkey, _configuration.AppSettings.EffectiveVerticalDecreaseHotkey, out var verticalError)) _initialError = verticalError;
         if (!_bridge.TrayAvailable) _initialError = _bridge.AvailabilityError;
         _system.ColorValuesChanged += System_ColorValuesChanged;
         _saveTimer.Tick += (_, _) => Save();
@@ -92,13 +108,15 @@ public sealed partial class MainWindow : Window
         AppWindow.Closing += (_, args) =>
         {
             Save();
-            if (_dirty) { args.Cancel = true; _runtime.SetEnabled(false); _bridge.Show(); OnShown(); }
+            if (_dirty) { args.Cancel = true; _runtime.SetEnabled(false); _exitRequested = false; _bridge.Show(); OnShown(); }
+            else if ((!_smoke || _interactiveCheck) && !_exitRequested && _configuration.AppSettings.CloseToTray && _bridge.TrayAvailable)
+            { args.Cancel = true; _bridge.Hide(); OnHidden(); }
         };
         Root.Loaded += (_, _) =>
         {
             if (_initialError is not null) ShowNotice(_initialError, InfoBarSeverity.Warning);
 #if DEBUG
-            if (_smoke) _ = SmokeTest();
+            if (_smoke && !_interactiveCheck) _ = SmokeTest();
 #endif
         };
         ApplyTheme();
@@ -144,7 +162,7 @@ public sealed partial class MainWindow : Window
             edit.Click += async (_, _) => await EditProfile(profile.Id);
             menu.Items.Add(edit);
             var duplicate = new MenuFlyoutItem { Text = "Duplicate" };
-            duplicate.Click += (_, _) => AddProfile(profile);
+            duplicate.Click += (_, _) => DuplicateProfile(profile.Id);
             menu.Items.Add(duplicate);
             tab.ContextFlyout = menu;
             tab.DoubleTapped += async (_, _) => await EditProfile(profile.Id);
@@ -187,6 +205,10 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(StatusText, status);
         if (status.Contains("failed", StringComparison.OrdinalIgnoreCase) || status.Contains("error", StringComparison.OrdinalIgnoreCase)) ShowNotice(status, InfoBarSeverity.Error);
         _bridge.UpdateTray(_runtime.Enabled, _runtime.Status, _configuration.Profiles, Current.Id);
+        var enabled = _runtime.Enabled;
+        if (_feedbackInitialized && (enabled != _feedbackEnabled || enabled && Current.Id != _feedbackProfileId))
+            EmitFeedback(enabled ? "On" : "Off");
+        _feedbackInitialized = true; _feedbackEnabled = enabled; _feedbackProfileId = Current.Id;
         _updating = before;
     }
 
@@ -200,13 +222,22 @@ public sealed partial class MainWindow : Window
         ArduinoStatusText.Text = online ? "Online" : "Offline";
         ToolTipService.SetToolTip(ArduinoStatus, online
             ? $"Arduino · {_runtime.BackendPort} · firmware connected. Idle connections are not polled."
-            : $"Arduino · {_configuration.AppSettings.ArduinoPort} · waiting for MouseControl firmware.");
+            : $"Arduino · {_configuration.AppSettings.ArduinoPort} · " + (_connectionError ?? "waiting for MouseControl firmware."));
         if (arduino && !online && !_smoke) _connectionTimer.Start();
         else _connectionTimer.Stop();
         RefreshStatus();
+        if (arduino && !online) StatusText.Text = "Offline";
+        if (_connectionError is not null) ToolTipService.SetToolTip(StatusText, _connectionError);
     }
 
-    private static string[] AvailablePorts() => SerialPort.GetPortNames().Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    private string[] AvailablePorts()
+    {
+#if DEBUG
+        if (_smoke && Environment.GetEnvironmentVariable("MOUSECONTROL_SMOKE_PORTS") is { Length: > 0 } ports)
+            return ports.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+#endif
+        return SerialPort.GetPortNames().Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 
     private async Task TryConnectArduino()
     {
@@ -223,7 +254,7 @@ public sealed partial class MainWindow : Window
                 lock (_backendSetupLock)
                 {
                     if (_closed || revision != Volatile.Read(ref _backendRevision)) return;
-                    _runtime.TryReconnectArduino(port, out _);
+                    _connectionError = _runtime.TryReconnectArduino(port, out var error) ? null : error;
                 }
             });
         }
@@ -251,6 +282,7 @@ public sealed partial class MainWindow : Window
         lock (_backendSetupLock)
         {
             Interlocked.Increment(ref _backendRevision);
+            _connectionError = null;
             if (!_runtime.SelectBackendDisconnected(kind, port, out var error))
             { ShowNotice(error, InfoBarSeverity.Error); return false; }
             _configuration = _configuration with { AppSettings = _configuration.AppSettings with { InputBackend = kind, ArduinoPort = port } };
@@ -336,11 +368,16 @@ public sealed partial class MainWindow : Window
         ReplaceProfile(Current with { Activation = binding });
     }
     private void AddProfile_Click(TabView sender, object args) => AddProfile(Current);
+    private void DuplicateProfile(Guid id)
+    {
+        var source = _configuration.Profiles.FirstOrDefault(profile => profile.Id == id);
+        if (source is not null) AddProfile(source);
+    }
     private void AddProfile(Profile source)
     {
         var suffix = 2; var name = "Profile " + suffix;
         while (_configuration.Profiles.Any(p => p.Name == name)) name = "Profile " + ++suffix;
-        var profile = source with { Id = Guid.NewGuid(), Name = name };
+        var profile = source with { Id = Guid.NewGuid(), Name = name, Color = NewProfileColor() };
         _configuration = _configuration with { Profiles = _configuration.Profiles.Append(profile).ToArray() };
         SelectProfile(profile.Id);
     }
@@ -349,11 +386,20 @@ public sealed partial class MainWindow : Window
         if (!_configuration.Profiles.Any(p => p.Id == id)) return;
         CancelCapture();
         _configuration = _configuration with { AppSettings = _configuration.AppSettings with { ActiveProfileId = id } };
-        _runtime.SetProfile(Current); RebuildTabs(); RefreshControls(); RefreshStatus(); MarkDirty();
+        _runtime.SetProfile(Current);
+        if (ProfileTabs.TabItems.Count != _configuration.Profiles.Count ||
+            ProfileTabs.TabItems.OfType<TabViewItem>().Any(tab => tab.Tag is not Guid tag || !_configuration.Profiles.Any(profile => profile.Id == tag))) RebuildTabs();
+        else
+        {
+            var before = _updating; _updating = true;
+            ProfileTabs.SelectedItem = ProfileTabs.TabItems.OfType<TabViewItem>().FirstOrDefault(tab => tab.Tag is Guid tag && tag == id);
+            _updating = before;
+        }
+        RefreshControls(); RefreshStatus(); MarkDirty();
     }
     private void Profile_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_updating && ProfileTabs.SelectedItem is TabViewItem { Tag: Guid id } && id != Current.Id) SelectProfile(id);
+        if (!_updating && !_tabDragging && ProfileTabs.SelectedItem is TabViewItem { Tag: Guid id } && id != Current.Id) SelectProfile(id);
     }
     private void Profile_CloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
     {
@@ -390,7 +436,7 @@ public sealed partial class MainWindow : Window
         var panel = new StackPanel { Spacing = 14 }; panel.Children.Add(name); panel.Children.Add(color);
         var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Edit profile", Content = panel, PrimaryButtonText = "Save", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
         dialog.PrimaryButtonClick += (_, e) => { if (string.IsNullOrWhiteSpace(name.Text)) { name.Header = "Enter a profile name"; e.Cancel = true; } };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        if (await ShowDialog(dialog) == ContentDialogResult.Primary)
         {
             ReplaceProfile(profile with { Name = name.Text.Trim(), Color = $"#{color.Color.R:X2}{color.Color.G:X2}{color.Color.B:X2}" });
             RebuildTabs(); RefreshStatus();
@@ -402,7 +448,7 @@ public sealed partial class MainWindow : Window
         _capturing = !_capturing; ApplySuspension(); _runtime.Invalidate();
         RefreshControls(); HotkeyButton.Focus(FocusState.Programmatic);
     }
-    private void ApplySuspension() => _runtime.SetSuspended(_capturing || _sessionSuspended);
+    private void ApplySuspension() => _runtime.SetSuspended(_capturing || _sessionSuspended || _dialogOpen);
     private void CancelCapture() { if (!_capturing) return; _capturing = false; ApplySuspension(); RefreshControls(); }
     private void Root_KeyDown(object sender, KeyRoutedEventArgs e)
     {
@@ -497,68 +543,15 @@ public sealed partial class MainWindow : Window
     { var dot = new Ellipse { Width = radius * 2, Height = radius * 2, Fill = fill, Stroke = stroke, StrokeThickness = stroke is null ? 0 : 2.5 }; Canvas.SetLeft(dot, x - radius); Canvas.SetTop(dot, y - radius); PadCanvas.Children.Add(dot); }
     private static Color ParseColor(string hex) => Color.FromArgb(255, byte.Parse(hex.AsSpan(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture), byte.Parse(hex.AsSpan(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture), byte.Parse(hex.AsSpan(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
 
-    private async void Settings_Click(object sender, RoutedEventArgs e)
+    internal async void ApplyStartupVisibility()
     {
-        CancelCapture(); _runtime.Invalidate();
-        var range = new TextBlock { Text = "Axis range: −2000 to +2000 input units/s, step 1. Windows pointer settings affect screen speed.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 };
-        var rates = new[] { 125, 250, 500, 1000 };
-        var outputRate = new ComboBox { Header = "Requested output rate", ItemsSource = rates.Select(rate => $"{rate} Hz").ToArray(), SelectedIndex = Array.IndexOf(rates, _configuration.AppSettings.OutputRateHz), HorizontalAlignment = HorizontalAlignment.Stretch };
-        var timing = new TextBlock { Text = "Host scheduling target. Windows timing and Arduino acknowledgements can lower the effective rate.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 };
-        var backend = new ComboBox { Header = "Input method", HorizontalAlignment = HorizontalAlignment.Stretch };
-        backend.Items.Add("Windows (SendInput)"); backend.Items.Add("Arduino Leonardo (USB HID)");
-        backend.SelectedIndex = (int)_configuration.AppSettings.InputBackend;
-        var port = new ComboBox { Header = "Arduino COM port", IsEditable = true, HorizontalAlignment = HorizontalAlignment.Stretch, Text = _configuration.AppSettings.ArduinoPort };
-        var refresh = new Button { Content = "Refresh ports" };
-        void RefreshPorts()
+        if ((!_smoke || _interactiveCheck) && !_configuration.AppSettings.SuppressDonationPrompt)
         {
-            var selected = port.Text;
-            try { port.ItemsSource = AvailablePorts(); port.Text = selected; }
-            catch (Exception ex) { ShowNotice("Port discovery failed: " + ex.Message, InfoBarSeverity.Warning); }
+            try { await ShowDonationPrompt(); }
+            catch (Exception ex) { if (!_closed) ShowNotice("Startup prompt could not be shown: " + ex.Message, InfoBarSeverity.Warning); }
         }
-        refresh.Click += (_, _) => RefreshPorts(); RefreshPorts();
-        var portPanel = new StackPanel { Spacing = 8 };
-        portPanel.Children.Add(port); portPanel.Children.Add(refresh);
-        portPanel.Children.Add(new TextBlock { Text = "Waits for the selected port while offline. Requires MouseControl Leonardo firmware.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 });
-        void UpdatePortVisibility() => portPanel.Visibility = backend.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
-        backend.SelectionChanged += (_, _) => UpdatePortVisibility(); UpdatePortVisibility();
-        var folder = new Button { Content = "Open data folder" };
-        var startInTray = new CheckBox { Content = "Start in tray", IsChecked = _configuration.AppSettings.StartInTray };
-        folder.Click += (_, _) => { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = _dataFolder, UseShellExecute = true }); } catch (Exception ex) { ShowNotice("Data folder could not be opened: " + ex.Message, InfoBarSeverity.Warning); } };
-        using var licenseStream = typeof(MotionSettings).Assembly.GetManifestResourceStream("MouseControl.GhostCursorSharp.License");
-        using var licenseReader = licenseStream is null ? null : new StreamReader(licenseStream);
-        using var originalLicenseStream = typeof(MotionSettings).Assembly.GetManifestResourceStream("MouseControl.GhostCursor.License");
-        using var originalLicenseReader = originalLicenseStream is null ? null : new StreamReader(originalLicenseStream);
-        var license = new Expander { Header = "Third-party license", HorizontalAlignment = HorizontalAlignment.Stretch, Content = new TextBlock { Text = "GhostCursorSharp geometry\n\n" + (licenseReader?.ReadToEnd() ?? "See THIRD_PARTY_NOTICES.md in the repository.") + "\n\nOriginal ghost-cursor\n\n" + originalLicenseReader?.ReadToEnd(), TextWrapping = TextWrapping.Wrap, FontSize = 11 } };
-        var panel = new StackPanel { Spacing = 14 }; foreach (var element in new UIElement[] { backend, portPanel, startInTray, outputRate, timing, range, folder, license }) panel.Children.Add(element);
-        var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Settings", Content = new ScrollViewer { Content = panel, MaxHeight = 390 }, PrimaryButtonText = "Save", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
-        dialog.PrimaryButtonClick += (_, args) =>
-        {
-            if (backend.SelectedIndex == 1 && !ProfileConfiguration.IsArduinoPortName(port.Text.Trim()))
-            { port.Header = "Enter a COM port, for example COM5"; args.Cancel = true; }
-        };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
-        {
-            if ((startInTray.IsChecked == true) != _configuration.AppSettings.StartInTray)
-            {
-                _configuration = _configuration with { AppSettings = _configuration.AppSettings with { StartInTray = startInTray.IsChecked == true } };
-                MarkDirty();
-            }
-            var requestedRate = rates[outputRate.SelectedIndex];
-            if (requestedRate != _configuration.AppSettings.OutputRateHz)
-            {
-                _runtime.SetOutputRateHz(requestedRate);
-                _configuration = _configuration with { AppSettings = _configuration.AppSettings with { OutputRateHz = requestedRate } };
-                MarkDirty();
-            }
-            var kind = (InputBackendKind)backend.SelectedIndex;
-            var selectedPort = kind == InputBackendKind.Arduino ? port.Text.Trim().ToUpperInvariant() : _configuration.AppSettings.ArduinoPort;
-            if (kind != _configuration.AppSettings.InputBackend || selectedPort != _configuration.AppSettings.ArduinoPort)
-                SelectInputBackend(kind, selectedPort);
-        }
-    }
-    internal void ApplyStartupVisibility()
-    {
-        if (!_smoke && _configuration.AppSettings.StartInTray && _bridge.TrayAvailable)
+        if (_closed) return;
+        if ((!_smoke || _interactiveCheck) && _configuration.AppSettings.StartInTray && _bridge.TrayAvailable)
         { _bridge.Hide(); OnHidden(); }
     }
     private void OnShown() { _hidden = false; CancelCapture(); _runtime.Invalidate(); RebuildPreview(); }
@@ -573,13 +566,14 @@ public sealed partial class MainWindow : Window
         else ShowNotice("Settings could not be saved. Changes remain in this session. " + result.Error, InfoBarSeverity.Error);
     }
     private void ShowNotice(string message, InfoBarSeverity severity, ButtonBase? action = null) { Notice.ActionButton = action; Notice.Message = message; Notice.Severity = severity; Notice.IsOpen = true; }
-    private void RequestExit() { _runtime.SetEnabled(false); Save(); if (_dirty) { _bridge.Show(); OnShown(); return; } Close(); }
+    private void RequestExit() { _runtime.SetEnabled(false); Save(); if (_dirty) { _bridge.Show(); OnShown(); return; } _exitRequested = true; Close(); }
     private void Window_Closed(object sender, WindowEventArgs args)
     {
         if (_closed) return; _closed = true;
         _previewTimer.Stop(); _saveTimer.Stop(); _connectionTimer.Stop();
         lock (_backendSetupLock) { Interlocked.Increment(ref _backendRevision); _runtime.SetEnabled(false); _runtime.Dispose(); }
         _bridge.Dispose();
+        _feedback?.Dispose();
         _system.ColorValuesChanged -= System_ColorValuesChanged;
         Save();
     }
@@ -596,9 +590,23 @@ public sealed partial class MainWindow : Window
             if (HorizontalNumber.Value != 360 || VerticalNumber.Value != 840 || HumanSlider.Value != 35) throw new Exception("Slider synchronization failed.");
             var original = Current.Id; AddProfile(Current); var created = Current.Id;
             if (created == original || _configuration.Profiles.Count != 2) throw new Exception("Profile creation failed.");
+            if (_configuration.Profiles[0].Color == Current.Color) throw new Exception("A new profile reused the existing color.");
+            _tabDragging = true;
+            var movedTab = ProfileTabs.TabItems[1]; ProfileTabs.TabItems.RemoveAt(1); ProfileTabs.TabItems.Insert(0, movedTab);
+            PersistTabOrder(); _tabDragging = false;
+            if (_configuration.Profiles[0].Id != created || Current.Id != created) throw new Exception("Profile reordering changed selection or did not persist.");
             SelectProfile(original);
             VerticalNumber.Value = -23;
             if (Math.Abs(Current.Motion.Y + 23 / MotionUi.MaximumSpeed) > 1e-9) throw new Exception("Numeric field synchronization failed.");
+            AdjustVertical(1);
+            if (Math.Abs(Current.Motion.Y * MotionUi.MaximumSpeed - 27) > 1e-9) throw new Exception("Default vertical step failed.");
+            _configuration = _configuration with { AppSettings = _configuration.AppSettings with { VerticalStep = 125 } };
+            AdjustVertical(-1);
+            if (Math.Abs(Current.Motion.Y * MotionUi.MaximumSpeed + 98) > 1e-9) throw new Exception("Configured vertical step failed.");
+            SetVector(Current.Motion.X, 1); AdjustVertical(1);
+            if (Current.Motion.Y != 1) throw new Exception("Vertical adjustment exceeded the component cap.");
+            SetVector(Current.Motion.X, -23 / MotionUi.MaximumSpeed);
+            if (AppWindow.Presenter is not OverlappedPresenter { IsResizable: false, IsMaximizable: false }) throw new Exception("Window size is not fixed.");
             HorizontalNumber.Value = 1501;
             if (HorizontalSlider.Value != 1501 || Math.Abs(Current.Motion.X * MotionUi.MaximumSpeed - 1501) > 1e-9) throw new Exception("Expanded speed range or unit step failed.");
             var beforeStep = Current.Motion.X;
@@ -628,6 +636,22 @@ public sealed partial class MainWindow : Window
             _sessionSuspended = true; _capturing = true; CancelCapture();
             if (!_sessionSuspended || _capturing) throw new Exception("Independent suspension failed.");
             _sessionSuspended = false; ApplySuspension();
+            var duplicateSource = Current;
+            SelectProfile(created); DuplicateProfile(duplicateSource.Id);
+            if (Current.Motion != duplicateSource.Motion || Current.Activation != duplicateSource.Activation || Current.Color == duplicateSource.Color)
+                throw new Exception("Duplicate did not use the current profile state and a new color.");
+            SelectProfile(original);
+            var donationCheck = ShowDonationPrompt();
+            await Task.Delay(200);
+            var donation = _debugDonationDialog ?? throw new Exception("Donation dialog did not open.");
+            if (donation.IsPrimaryButtonEnabled) throw new Exception("Donation close was enabled before five seconds.");
+            donation.Hide(); await Task.Delay(200);
+            if (donationCheck.IsCompleted || !_dialogOpen) throw new Exception("Donation closed before five seconds.");
+            await Task.Delay(5100);
+            if (!donation.IsPrimaryButtonEnabled) throw new Exception("Donation close remained disabled after five seconds.");
+            ((StackPanel)donation.Content).Children.OfType<CheckBox>().Single().IsChecked = true;
+            donation.Hide(); await donationCheck;
+            if (!_store.Load().Configuration!.AppSettings.SuppressDonationPrompt) throw new Exception("Donation opt-out was not saved.");
             if (!SelectInputBackend(InputBackendKind.Arduino, "COM65535")) throw new Exception("Offline backend selection failed.");
             _runtime.SetEnabled(true);
             if (_runtime.Enabled || ArduinoStatus.Visibility != Visibility.Visible || ArduinoStatusText.Text != "Offline") throw new Exception("Disconnected Arduino must remain disabled.");
@@ -653,7 +677,7 @@ public sealed partial class MainWindow : Window
                 await SaveScreenshot(capture.Pixels, capture.Width, capture.Height, screenshot);
             }
             finally { NativeScreenshot.RestoreAfterCapture(captureHwnd); }
-            File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = true, simulation = true, synchronizedControls = true, createdProfile = true, numericEdit = true, numericButtonsHidden = true, speedRange = MotionUi.MaximumSpeed, oneUnitStep = true, availableModels = MotionUi.Models.Select(model => model.ToString()).ToArray(), combinedEffects = true, profileRoundtrip = true, unchangedProfileEditsIgnored = true, requestedOutputRate = _runtime.RequestedOutputRateHz, offlineArduinoBlocked = true, windowsBackendRestored = true, trayAvailable = _bridge.TrayAvailable, screenshot }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = true, simulation = true, synchronizedControls = true, createdProfile = true, distinctNewColors = true, persistedTabOrder = true, duplicateUsesCurrentSettings = true, defaultAndCustomVerticalStep = true, fixedWindow = true, donationFiveSecondLock = true, donationOptOutSaved = true, numericEdit = true, numericButtonsHidden = true, speedRange = MotionUi.MaximumSpeed, oneUnitStep = true, availableModels = MotionUi.Models.Select(model => model.ToString()).ToArray(), combinedEffects = true, profileRoundtrip = true, unchangedProfileEditsIgnored = true, requestedOutputRate = _runtime.RequestedOutputRateHz, offlineArduinoBlocked = true, windowsBackendRestored = true, trayAvailable = _bridge.TrayAvailable, screenshot }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(output)!); File.WriteAllText(output, System.Text.Json.JsonSerializer.Serialize(new { passed = false, error = ex.ToString() })); }
         finally { Close(); }

@@ -22,7 +22,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MouseControl</AssemblyName>
     <RootNamespace>MouseControl.App</RootNamespace>
-    <Version>0.3.2</Version>
+    <Version>0.4.0</Version>
     <Authors>SleNdd</Authors>
     <Company>SleNdd</Company>
     <Product>MouseControl</Product>

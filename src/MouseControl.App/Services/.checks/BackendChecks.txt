@@ -19,6 +19,8 @@ internal static class BackendChecks
 
     public static void Protocol()
     {
+        SerialConnectionReset();
+        SerialConnectionResetFailures();
         Check(ArduinoProtocol.Crc(Encoding.ASCII.GetBytes("123456789")) == 0x29B1, "CRC16-CCITT golden vector failed.");
         Check(Convert.ToHexString(ArduinoProtocol.Encode(new(ArduinoCommand.Hello, 0x01020304, 0))) ==
             "A55A0101040302010000000000006D44", "Exact HELLO frame golden vector failed.");
@@ -38,6 +40,66 @@ internal static class BackendChecks
         var bad = new FakeTransport { Transform = packet => ArduinoProtocol.Encode(packet with { X = (sbyte)'X' }) };
         Throws(() => new ArduinoInputBackend(bad, "COM9", 124));
         Check(!bad.IsOpen && bad.Commands.Count == 1, "Bad identity did not close without retry.");
+    }
+
+    private static void SerialConnectionReset()
+    {
+        // Model a board that retained a prior session. Every new connection must reset
+        // that state through an observed low DTR interval before identifying once.
+        foreach (var session in new uint[] { 123, 124 })
+        {
+            var connection = new FakeSerialConnection();
+            var creations = 0;
+            var transport = new ArduinoSerialTransport("COM9", (port, baudRate) =>
+            {
+                Check(port == "COM9" && baudRate == 115200, "Serial reset changed port or used bootloader baud.");
+                creations++;
+                return connection;
+            }, milliseconds =>
+            {
+                Check(milliseconds == 300, "Serial reset interval is not bounded at 300ms.");
+                connection.ObserveLowDtr(milliseconds);
+            });
+            Check(connection.Events.SequenceEqual(new[] { "dtr:low", "open", "delay:300", "discard:input", "discard:output", "dtr:high" }),
+                "DTR/reset/buffer ordering changed.");
+            Check(connection.Commands.Count == 0 && creations == 1, "Opening sent a command or retried.");
+            using (var backend = new ArduinoInputBackend(transport, "COM9", session))
+            {
+                Check(backend.Connected && connection.Commands.Count == 1 &&
+                    connection.Commands[0] == new ArduinoPacket(ArduinoCommand.Hello, session, 0),
+                    "Retained session did not accept exactly one fresh HELLO without motion.");
+                Check(connection.ReadTimeout > 0 && connection.ReadTimeout <= 500 && connection.WriteTimeout == 100,
+                    "Serial adapter did not forward bounded handshake timeouts.");
+            }
+            Check(!connection.IsOpen && !connection.Dtr && connection.Disposals == 1, "Identified connection was not closed.");
+        }
+
+        // Negative control: a 50ms interval cannot clear firmware connection state
+        // when a prior USB send blocks the loop for its 250ms timeout.
+        var retained = new FakeSerialConnection();
+        var unobserved = new ArduinoSerialTransport("COM9", (_, _) => retained, _ => retained.ObserveLowDtr(50));
+        Throws(() => new ArduinoInputBackend(unobserved, "COM9", 125));
+        Check(retained.Commands.Count == 1 && retained.Commands[0].Command == ArduinoCommand.Hello &&
+            !retained.IsOpen && retained.Disposals == 1, "Retained-session rejection retried or remained open.");
+    }
+
+    private static void SerialConnectionResetFailures()
+    {
+        var operations = new[] { "dtr:low", "open", "delay:300", "discard:input", "discard:output", "dtr:high" };
+        for (var i = 0; i < operations.Length; i++)
+        {
+            var connection = new FakeSerialConnection { FailAt = operations[i] };
+            Throws(() => new ArduinoSerialTransport("COM9", (_, _) => connection, connection.ObserveLowDtr));
+            Check(connection.Events.SequenceEqual(operations.Take(i + 1).Append("dispose")),
+                $"Initialization continued after {operations[i]} failure.");
+            Check(!connection.IsOpen && !connection.Dtr && connection.Disposals == 1 && connection.Commands.Count == 0,
+                $"Initialization failure at {operations[i]} leaked the connection or sent/replayed commands.");
+        }
+
+        var creations = 0;
+        var delays = 0;
+        Throws(() => new ArduinoSerialTransport("invalid", (_, _) => { creations++; return new FakeSerialConnection(); }, _ => delays++));
+        Check(creations == 0 && delays == 0, "Invalid port created a connection or waited.");
     }
 
     public static void Segments()
@@ -152,6 +214,67 @@ internal static class BackendChecks
         using var runtime = new RuntimeService(true, null, _ => false, () => false, null, null,
             port => { connections++; throw new InvalidOperationException("must not open"); });
         Check(!runtime.SetBackend(InputBackendKind.Arduino, "COM9", out _) && connections == 0, "Simulation opened serial.");
+    }
+}
+
+internal sealed class FakeSerialConnection : IArduinoSerialConnection
+{
+    // The firmware retains this until its loop observes low DTR. Seed stale input and
+    // output too, so successful identification requires both buffers to be cleared.
+    private uint? _session = 77;
+    private readonly Queue<byte> _input = new(ArduinoProtocol.Encode(new(ArduinoCommand.HelloAck, 77, 0, (sbyte)'M', (sbyte)'C')));
+    private bool _staleOutput = true;
+    public bool IsOpen { get; private set; }
+    public bool Dtr { get; private set; } = true;
+    public bool DtrEnable
+    {
+        set { Operation(value ? "dtr:high" : "dtr:low"); Dtr = value; }
+    }
+    public int ReadTimeout { get; set; }
+    public int WriteTimeout { get; set; }
+    public int Disposals { get; private set; }
+    public string? FailAt { get; init; }
+    public List<string> Events { get; } = new();
+    public List<ArduinoPacket> Commands { get; } = new();
+
+    public void Open()
+    {
+        Operation("open");
+        if (Dtr) throw new InvalidOperationException("Port opened with DTR high.");
+        IsOpen = true;
+    }
+    public void ObserveLowDtr(int milliseconds)
+    {
+        Operation($"delay:{milliseconds}");
+        if (!IsOpen || Dtr) throw new InvalidOperationException("Reset interval was not after opening with DTR low.");
+        // Model the firmware loop resuming after a worst-case USB send timeout.
+        if (milliseconds > 250) _session = null;
+    }
+    public void DiscardInBuffer() { Operation("discard:input"); _input.Clear(); }
+    public void DiscardOutBuffer() { Operation("discard:output"); _staleOutput = false; }
+    public void Write(byte[] bytes, int offset, int count)
+    {
+        if (!IsOpen || !Dtr || _staleOutput || _input.Count != 0) throw new InvalidOperationException("Write preceded serial initialization.");
+        if (!ArduinoProtocol.TryDecode(bytes.AsSpan(offset, count), out var request)) throw new InvalidOperationException("Bad outgoing frame.");
+        Commands.Add(request);
+        var accepted = request.Command == ArduinoCommand.Hello && _session is null;
+        if (accepted) _session = request.Session;
+        var reply = request with { Command = accepted ? ArduinoCommand.HelloAck : ArduinoCommand.Nack,
+            X = accepted ? (sbyte)'M' : (sbyte)1, Y = accepted ? (sbyte)'C' : (sbyte)0 };
+        foreach (var value in ArduinoProtocol.Encode(reply)) _input.Enqueue(value);
+    }
+    public int Read(byte[] bytes, int offset, int count)
+    {
+        if (!IsOpen || _input.Count == 0) throw new TimeoutException("Fake serial reply missing.");
+        var size = Math.Min(count, _input.Count);
+        for (var i = 0; i < size; i++) bytes[offset + i] = _input.Dequeue();
+        return size;
+    }
+    public void Dispose() { Events.Add("dispose"); Disposals++; IsOpen = false; Dtr = false; _input.Clear(); }
+    private void Operation(string operation)
+    {
+        Events.Add(operation);
+        if (FailAt == operation) throw new IOException($"Fake serial failure at {operation}.");
     }
 }
 
