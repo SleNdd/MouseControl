@@ -40,6 +40,7 @@ public sealed partial class MainWindow : Window
     private readonly bool _smoke;
     private readonly bool _interactiveCheck;
     private DesktopFeedbackService? _feedback;
+    private DesktopStatusOverlay? _statusOverlay;
     private bool _feedbackInitialized, _feedbackEnabled, _dialogOpen, _exitRequested;
     private Guid _feedbackProfileId;
     private string? _connectionError;
@@ -86,8 +87,9 @@ public sealed partial class MainWindow : Window
         _runtime.BackendChanged += () => DispatcherQueue.TryEnqueue(RefreshBackendStatus);
         if (_configuration.AppSettings.InputBackend == InputBackendKind.Arduino)
             _runtime.SelectBackendDisconnected(InputBackendKind.Arduino, _configuration.AppSettings.ArduinoPort, out _);
-        _bridge = new WindowBridge(hwnd);
+        _bridge = new WindowBridge(hwnd, App.Mask?.ProcessName, App.Mask?.IconPath);
         if (!_smoke || _interactiveCheck) _feedback = new DesktopFeedbackService(DispatcherQueue, hwnd);
+        _statusOverlay = new DesktopStatusOverlay(DispatcherQueue, hwnd);
         _bridge.ShowRequested += OnShown;
         _bridge.HideRequested += OnHidden;
         _bridge.ToggleRequested += () => { CancelCapture(); _runtime.SetEnabled(!_runtime.Enabled); RefreshStatus(); };
@@ -206,6 +208,7 @@ public sealed partial class MainWindow : Window
         if (status.Contains("failed", StringComparison.OrdinalIgnoreCase) || status.Contains("error", StringComparison.OrdinalIgnoreCase)) ShowNotice(status, InfoBarSeverity.Error);
         _bridge.UpdateTray(_runtime.Enabled, _runtime.Status, _configuration.Profiles, Current.Id);
         var enabled = _runtime.Enabled;
+        UpdateStatusOverlay();
         if (_feedbackInitialized && (enabled != _feedbackEnabled || enabled && Current.Id != _feedbackProfileId))
             EmitFeedback(enabled ? "On" : "Off");
         _feedbackInitialized = true; _feedbackEnabled = enabled; _feedbackProfileId = Current.Id;
@@ -574,6 +577,7 @@ public sealed partial class MainWindow : Window
         lock (_backendSetupLock) { Interlocked.Increment(ref _backendRevision); _runtime.SetEnabled(false); _runtime.Dispose(); }
         _bridge.Dispose();
         _feedback?.Dispose();
+        _statusOverlay?.Dispose();
         _system.ColorValuesChanged -= System_ColorValuesChanged;
         Save();
     }

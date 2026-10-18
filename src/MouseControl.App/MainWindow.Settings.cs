@@ -58,12 +58,14 @@ public sealed partial class MainWindow
         var closeToTray = new CheckBox { Content = "Close button minimizes to tray", IsChecked = settings.CloseToTray };
         var sound = new CheckBox { Content = "Sound notifications", IsChecked = settings.SoundNotifications };
         var notifications = new CheckBox { Content = "Desktop notifications", IsChecked = settings.DesktopNotifications };
+        var statusOverlay = new CheckBox { Content = "Always show status and vertical speed", IsChecked = settings.PersistentStatusOverlay };
+        var overlayHint = new TextBlock { Text = "Tiny, faint text in the top-left screen corner, for example on 450. Mouse clicks pass through it.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.65 };
         var folder = new Button { Content = "Open data folder" };
         folder.Click += (_, _) => { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = _dataFolder, UseShellExecute = true }); } catch (Exception ex) { ShowNotice("Data folder could not be opened: " + ex.Message, InfoBarSeverity.Warning); } };
         string ReadLicense(string name) { using var stream = typeof(MainWindow).Assembly.GetManifestResourceStream(name) ?? typeof(MotionSettings).Assembly.GetManifestResourceStream(name); using var reader = stream is null ? null : new StreamReader(stream); return reader?.ReadToEnd() ?? "See THIRD_PARTY_NOTICES.md."; }
         var license = new Expander { Header = "Third-party licenses", HorizontalAlignment = HorizontalAlignment.Stretch, Content = new TextBlock { Text = ReadLicense("MouseControl.GhostCursorSharp.License") + "\n\n" + ReadLicense("MouseControl.GhostCursor.License") + "\n\n" + ReadLicense("MouseControl.NAudio.License"), TextWrapping = TextWrapping.Wrap, FontSize = 11 } };
         var panel = new StackPanel { Spacing = 14 };
-        foreach (var element in new UIElement[] { backend, portPanel, hotkeys, startInTray, closeToTray, sound, notifications, outputRate, folder, license }) panel.Children.Add(element);
+        foreach (var element in new UIElement[] { backend, portPanel, hotkeys, startInTray, closeToTray, sound, notifications, statusOverlay, overlayHint, outputRate, folder, license }) panel.Children.Add(element);
         var errorText = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.IndianRed) };
         panel.Children.Insert(0, errorText);
         var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Settings", Content = new ScrollViewer { Content = panel, MaxHeight = 390 }, PrimaryButtonText = "Save", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
@@ -97,7 +99,8 @@ public sealed partial class MainWindow
         {
             VerticalIncreaseHotkey = increase, VerticalDecreaseHotkey = decrease, VerticalStep = (int)step.Value,
             StartInTray = startInTray.IsChecked == true, CloseToTray = closeToTray.IsChecked == true,
-            SoundNotifications = sound.IsChecked == true, DesktopNotifications = notifications.IsChecked == true
+            SoundNotifications = sound.IsChecked == true, DesktopNotifications = notifications.IsChecked == true,
+            PersistentStatusOverlay = statusOverlay.IsChecked == true
         } };
         MarkDirty();
         var requestedRate = rates[outputRate.SelectedIndex];

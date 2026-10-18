@@ -28,8 +28,10 @@ internal sealed class DesktopFeedbackService : IDisposable
     }
 
     internal int ActiveToastCount => _toasts.Count;
+    internal string? LatestToastStatus => _toasts.FirstOrDefault()?.Status;
 
-    public void Show(string profileName, string colorHex, string status, bool playSound = false, bool showToast = true)
+    public void Show(string profileName, string colorHex, string status, bool playSound = false, bool showToast = true,
+        double? verticalUnitsPerSecond = null)
     {
         VerifyThread();
         if (_disposed) return;
@@ -51,7 +53,7 @@ internal sealed class DesktopFeedbackService : IDisposable
         var availableRows = Math.Max(1, (work.Bottom - baseY + gap) / (height + gap));
         var capacity = Math.Min(MaximumToasts, availableRows);
         while (_toasts.Count >= capacity) RemoveAt(_toasts.Count - 1);
-        var toast = new Toast(profileName, status, ParseColor(colorHex), IsDark(), scale,
+        var toast = new Toast(profileName, FormatStatus(status, verticalUnitsPerSecond), ParseColor(colorHex), IsDark(), scale,
             monitor.Left, work.Top, baseY, width, height);
         toast.Handle = native.Create(toast, monitor.Left - width, baseY, width, height);
         if (toast.Handle == 0) return; // Notifications must never prevent the actual action.
@@ -59,6 +61,11 @@ internal sealed class DesktopFeedbackService : IDisposable
         _timer.Start();
         Animate(_timer, null!);
     }
+
+    internal static string FormatStatus(string status, double? verticalUnitsPerSecond) =>
+        verticalUnitsPerSecond is { } vertical && double.IsFinite(vertical)
+            && (status.Equals("On", StringComparison.OrdinalIgnoreCase) || status.Equals("Off", StringComparison.OrdinalIgnoreCase))
+            ? $"{status} · {vertical.ToString("0.##", CultureInfo.InvariantCulture)} units/s" : status;
 
     public void PlaySound(DesktopFeedbackKind kind)
     {

@@ -26,6 +26,8 @@
     <Compile Include="../Arduino*.cs" Link="%(Filename).cs" />
     <Compile Include="../WindowBridge.cs" Link="WindowBridge.cs" />
     <Compile Include="../../Native.cs" Link="Native.cs" />
+    <Compile Include="../../../MouseControl.Launcher/ProcessMasker.cs" Link="ProcessMasker.cs" />
+    <Compile Include="../../../MouseControl.Launcher/ExecutableResources.cs" Link="ExecutableResources.cs" />
     <ProjectReference Include="../../../MouseControl.Core/MouseControl.Core.csproj" />
     <PackageReference Include="System.IO.Ports" Version="10.0.0" />
     <PackageReference Include="NAudio.Wasapi" Version="2.3.0" />

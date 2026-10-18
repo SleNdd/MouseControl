@@ -5,6 +5,8 @@ and .NET 10.
 
 ## Features
 
+- Automatic startup selection of an active application's process name and icon, with
+  browsers first and more numerous process groups preferred within each tier.
 - Three sliders with numeric fields: signed vertical and horizontal components, and
   Humanization strength.
 - A synchronized square direction pad and local motion preview.
@@ -19,6 +21,7 @@ and .NET 10.
 - A notification-area menu for showing the window, enabling motion, selecting a profile,
   and exiting, plus optional startup in the tray and close-to-tray behavior.
 - Compact color-coded desktop notifications and sound cues for On/Off and vertical changes.
+- Signed vertical speed in On/Off notifications and an optional faint corner status label.
 - Configurable vertical-adjustment hotkeys and step, defaulting to 50 input units/second.
 - Windows relative input or Arduino Leonardo USB HID output, with an Arduino-only
   Online/Offline indicator and reconnection while offline.
@@ -55,8 +58,14 @@ Start:
 .\artifacts\MouseControl\MouseControl.exe
 ```
 
-No separate .NET or Windows App SDK installation is needed. Embedded components extract
-to the user's runtime cache at launch. Settings are stored separately.
+No separate .NET or Windows App SDK installation is needed. The launcher extracts its own
+application into `%LOCALAPPDATA%\MouseControl\Runtime`, names its executable after the selected
+active process, and applies that application's icon to the executable, window and tray.
+Browsers take priority; within each tier the name with the most running instances wins.
+Unavailable and system processes are skipped. When no suitable process is available, the app
+uses its own name. The selected application's files are only read. Prepared files are reused
+on later launches; the first launch can take a few seconds. Existing MouseControl profiles
+remain in their original data folder.
 The published EXE can be renamed while retaining the `.exe` extension. The resource index
 uses the standard `resources.pri` name inside the bundle, independently of the EXE filename.
 
@@ -106,7 +115,16 @@ The window is fixed at 720 × 500 effective pixels, scaled for Windows DPI.
 vertical speed. Change both bindings and the step in Settings. Values stay within ±2000.
 On/Off and vertical changes play short cues and show a small profile-colored panel at the
 left screen edge. Panels slide, stack, and expire. Sound and desktop notifications can be
-disabled independently. The underlined corner credit opens SleNdd's GitHub profile.
+disabled independently. On/Off panels also show the current signed vertical speed, for
+example `On · 450 units/s`.
+
+**Settings → Always show status and vertical speed** enables a persistent label such as
+`on 450` or `off -350`. It uses 9-DIP text at 20% opacity, with a dark outline and a 2-DIP
+margin from the primary display's top-left corner. Its background is transparent and mouse
+clicks pass through. It stays visible while the main window is in the tray and follows
+enable/disable, vertical changes and profile switches. This option is off by default.
+
+The underlined corner credit opens SleNdd's GitHub profile.
 Rapid actions replace the current sound after a six-millisecond fade. Only the latest
 pending cue is retained; older actions do not accumulate into a delayed sound sequence.
 
@@ -144,6 +162,19 @@ dotnet run --project src/MouseControl.App/Services/.checks/ServiceChecks.csproj 
 
 These check core behavior and isolated runtime paths. Native tray, hotkey, session, and input
 integration require separate Windows verification.
+
+After publishing, check process selection, executable resources and cache preparation:
+
+```powershell
+dotnet run --project tests/MouseControl.Launcher.Checks/MouseControl.Launcher.Checks.csproj -c Release -- src/MouseControl.App/bin/Release/net10.0-windows10.0.19041.0/win-x64/MouseControl.App.exe
+$env:MOUSECONTROL_VERIFY_OUTPUT = "$PWD\artifacts\launch-verification.json"
+.\artifacts\MouseControl\MouseControl.exe --verify-launch
+```
+
+The diagnostic launch uses temporary profiles and simulated mouse output. It checks native
+window/tray icons, On/Off toast text, the overlay's position/transparency/input styles,
+status/value changes, hiding to the tray and turning the option off, then closes.
+Add `--no-mask` to check startup with the application's own process name.
 
 The Core harness can also run against the transformed assembly. See the
 [artifact verification command](src/MouseControl.Core/README.md#behavioral-harness).

@@ -75,7 +75,7 @@ static void ProtectedMetadata()
         "X", "Y", "Humanization", "MaxComponentRate", "Model", "PulseOverlay", "CorrectionsOverlay");
     AssertConstructorParameters(typeof(AppSettings),
         "ToggleHotkey", "ActiveProfileId", "InputBackend", "ArduinoPort", "OutputRateHz", "StartInTray",
-        "VerticalIncreaseHotkey", "VerticalDecreaseHotkey", "VerticalStep", "CloseToTray", "SoundNotifications", "DesktopNotifications", "SuppressDonationPrompt");
+        "VerticalIncreaseHotkey", "VerticalDecreaseHotkey", "VerticalStep", "CloseToTray", "SoundNotifications", "DesktopNotifications", "SuppressDonationPrompt", "PersistentStatusOverlay");
     AssertEnumIdentities<MotionModel>(
         ("Smooth", 0), ("Organic", 1), ("Wind", 2), ("Pulse", 3), ("Corrections", 4), ("Bezier", 5), ("Classic", 6));
     AssertEnumIdentities<ActivationBinding>(
@@ -475,18 +475,18 @@ static void DesktopSettingsCompatibility() => WithStore((store, path) =>
     var configuration = Sample();
     Assert(store.Save(configuration).Success, "Setup failed.");
     var document = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
-    foreach (var field in new[] { "verticalIncreaseHotkey", "verticalDecreaseHotkey", "verticalStep", "closeToTray", "soundNotifications", "desktopNotifications", "suppressDonationPrompt" })
+    foreach (var field in new[] { "verticalIncreaseHotkey", "verticalDecreaseHotkey", "verticalStep", "closeToTray", "soundNotifications", "desktopNotifications", "suppressDonationPrompt", "persistentStatusOverlay" })
         document["appSettings"]!.AsObject().Remove(field);
     File.WriteAllText(path, document.ToJsonString());
     var legacy = store.Load();
     Assert(legacy.Success, "Legacy desktop settings rejected.");
     var defaults = legacy.Configuration!.AppSettings;
-    Assert(defaults.VerticalStep == 50 && defaults.CloseToTray && defaults.SoundNotifications && defaults.DesktopNotifications && !defaults.SuppressDonationPrompt,
+    Assert(defaults.VerticalStep == 50 && defaults.CloseToTray && defaults.SoundNotifications && defaults.DesktopNotifications && !defaults.SuppressDonationPrompt && !defaults.PersistentStatusOverlay,
         "Legacy desktop defaults changed.");
     Assert(defaults.EffectiveVerticalIncreaseHotkey.VirtualKey == 0x26 && defaults.EffectiveVerticalDecreaseHotkey.VirtualKey == 0x28,
         "Default vertical bindings changed.");
     var updated = configuration with { AppSettings = defaults with { VerticalIncreaseHotkey = new(0x79, HotkeyModifiers.Alt), VerticalDecreaseHotkey = new(0x78, HotkeyModifiers.Alt),
-        VerticalStep = 125, CloseToTray = false, SoundNotifications = false, DesktopNotifications = false, SuppressDonationPrompt = true } };
+        VerticalStep = 125, CloseToTray = false, SoundNotifications = false, DesktopNotifications = false, SuppressDonationPrompt = true, PersistentStatusOverlay = true } };
     Assert(store.Save(updated).Success && store.Load().Configuration!.AppSettings == updated.AppSettings, "Desktop preferences did not roundtrip.");
     var original = File.ReadAllBytes(path);
     foreach (var settings in new[] { updated.AppSettings with { VerticalStep = 0 }, updated.AppSettings with { VerticalStep = 2001 },

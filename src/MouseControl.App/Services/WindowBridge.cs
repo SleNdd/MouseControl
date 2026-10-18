@@ -1,3 +1,4 @@
+using MouseControl.Masking;
 using System.Runtime.InteropServices;
 using MouseControl.Core;
 
@@ -14,6 +15,8 @@ public sealed class WindowBridge : IDisposable
     private readonly int _ownerThreadId = Environment.CurrentManagedThreadId;
     private readonly uint _taskbarCreated;
     private readonly uint _showExisting = Native.RegisterWindowMessage("SleNdd.MouseControl.ShowWindow");
+    private nint _ownedTrayIcon;
+    private readonly string _appName;
     private readonly HashSet<int> _registeredHotkeys = new();
     private Native.NotifyIcon _icon;
     private bool _subclassInstalled, _sessionNotifications, _disposed, _sessionBlocked, _powerBlocked;
@@ -25,10 +28,11 @@ public sealed class WindowBridge : IDisposable
     private Profile[] _profiles = Array.Empty<Profile>();
     private Guid _activeId;
 
-    public WindowBridge(nint hwnd)
+    public WindowBridge(nint hwnd, string? processName = null, string? iconPath = null)
     {
         if (hwnd == 0) throw new ArgumentException("A valid window handle is required.", nameof(hwnd));
         _hwnd = hwnd;
+        _appName = string.IsNullOrWhiteSpace(processName) ? "MouseControl" : processName;
         _callback = WindowProcedure;
         _callbackRoot = GCHandle.Alloc(_callback);
         _taskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
@@ -42,12 +46,22 @@ public sealed class WindowBridge : IDisposable
         _sessionNotifications = Native.WTSRegisterSessionNotification(hwnd, 0); // This session only.
         if (!_sessionNotifications) AddError("Session notification registration failed.");
         if (_taskbarCreated == 0) AddError("Explorer restart notification registration failed.");
+
+        // ---- MASKSHOW: use masked icon if available ----
+        nint trayIcon = 0;
+        trayIcon = ProcessMasker.LoadIconFromFile(iconPath, 16);
+        _ownedTrayIcon = trayIcon;
+        if (trayIcon == 0)
+            trayIcon = Native.LoadIcon(0, (nint)32512);
+
+        var trayTip = $"{_appName} — Disabled";
+
         _icon = new Native.NotifyIcon
         {
             Size = (uint)Marshal.SizeOf<Native.NotifyIcon>(), Window = hwnd, Id = TrayId,
             Flags = 0x1 | 0x2 | 0x4 | 0x80, // MESSAGE | ICON | TIP | SHOWTIP
-            Callback = Native.TrayMessage, Icon = Native.LoadIcon(0, (nint)32512),
-            Tip = "MouseControl — Disabled", Info = "", InfoTitle = ""
+            Callback = Native.TrayMessage, Icon = trayIcon,
+            Tip = Trim(trayTip, 127), Info = "", InfoTitle = ""
         };
         AddTrayIcon();
     }
@@ -63,6 +77,7 @@ public sealed class WindowBridge : IDisposable
     public event Action? DevicesChanged;
     public bool MenuOpen { get; private set; }
     public bool TrayAvailable { get; private set; }
+    internal nint TrayIconHandle => _icon.Icon;
     public bool HotkeyAvailable => _hotkey is not null;
     public string AvailabilityError { get; private set; } = "";
 
@@ -110,7 +125,10 @@ public sealed class WindowBridge : IDisposable
         _profiles = profiles.ToArray();
         _activeId = activeId;
         var profileName = _profiles.FirstOrDefault(p => p.Id == activeId)?.Name ?? "Default";
-        _icon.Tip = Trim($"MouseControl — {profileName} — {_status}", 127);
+
+        // MASKSHOW: use masked process name in tray tooltip.
+        _icon.Tip = Trim($"{_appName} — {profileName} — {_status}", 127);
+
         if (TrayAvailable && !Native.Shell_NotifyIcon(1, ref _icon))
         {
             TrayAvailable = false;
@@ -188,6 +206,11 @@ public sealed class WindowBridge : IDisposable
         _hotkey = null;
         _verticalHotkeys.Clear();
         Native.Shell_NotifyIcon(2, ref _icon);
+        if (_ownedTrayIcon != 0)
+        {
+            ProcessMasker.DestroyIcon(_ownedTrayIcon);
+            _ownedTrayIcon = 0;
+        }
         TrayAvailable = false;
         if (_sessionNotifications) Native.WTSUnRegisterSessionNotification(_hwnd);
         if (_subclassInstalled)
@@ -302,7 +325,10 @@ public sealed class WindowBridge : IDisposable
             menu = Native.CreatePopupMenu();
             profilesMenu = Native.CreatePopupMenu();
             if (menu == 0 || profilesMenu == 0) throw new InvalidOperationException("Tray menu could not be created.");
-            Append(menu, 0, 1, "Show MouseControl");
+
+            // MASKSHOW: use masked name in the tray menu.
+            var showLabel = $"Show {_appName}";
+            Append(menu, 0, 1, showLabel);
             Append(menu, _enabled ? 8u : 0u, 2, "Enabled");
             Append(menu, 2, 0, Trim(_status, 100));
             Append(menu, 0x800, 0, "");

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using MouseControl.Core;
+using MouseControl.App.Services;
 
 namespace MouseControl.App;
 
@@ -57,11 +58,22 @@ public sealed partial class MainWindow
 
     private void EmitFeedback(string status)
     {
-        try { _feedback?.Show(Current.Name, Current.Color, status, _configuration.AppSettings.SoundNotifications, _configuration.AppSettings.DesktopNotifications); }
+        try { _feedback?.Show(Current.Name, Current.Color, status, _configuration.AppSettings.SoundNotifications,
+            _configuration.AppSettings.DesktopNotifications, Current.Motion.Y * MotionUi.MaximumSpeed); }
         catch (Exception ex)
         {
             _feedback?.Dispose(); _feedback = null;
             ShowNotice("Desktop feedback is unavailable: " + ex.Message, InfoBarSeverity.Warning);
+        }
+    }
+
+    private void UpdateStatusOverlay()
+    {
+        try { _statusOverlay?.Update(_configuration.AppSettings.PersistentStatusOverlay, _runtime.Enabled, Current.Motion.Y * MotionUi.MaximumSpeed); }
+        catch (Exception ex)
+        {
+            _statusOverlay?.Dispose(); _statusOverlay = null;
+            ShowNotice("Status overlay is unavailable: " + ex.Message, InfoBarSeverity.Warning);
         }
     }
 

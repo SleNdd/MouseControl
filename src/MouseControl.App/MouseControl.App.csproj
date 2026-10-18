@@ -8,7 +8,7 @@
     <!-- MRT also recognizes this common name after the published EXE is renamed. -->
     <ProjectPriFileName>resources.pri</ProjectPriFileName>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <PublishSingleFile>true</PublishSingleFile>
+    <PublishSingleFile>false</PublishSingleFile>
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
@@ -20,9 +20,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>MouseControl</AssemblyName>
+    <AssemblyName>MouseControl.App</AssemblyName>
     <RootNamespace>MouseControl.App</RootNamespace>
-    <Version>0.4.1</Version>
+    <Version>0.5.0</Version>
     <Authors>SleNdd</Authors>
     <Company>SleNdd</Company>
     <Product>MouseControl</Product>
@@ -36,6 +36,8 @@
     <ProjectReference Include="../MouseControl.Core/MouseControl.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="../MouseControl.Launcher/ProcessMasker.cs" Link="Masking/ProcessMasker.cs" />
+    <Compile Include="../MouseControl.Launcher/ExecutableResources.cs" Link="Masking/ExecutableResources.cs" />
     <EmbeddedResource Include="ThirdParty/LICENSE.NAudio.txt" LogicalName="MouseControl.NAudio.License" />
   </ItemGroup>
   <Import Project="../../scripts/ObfuscateCore.targets" />

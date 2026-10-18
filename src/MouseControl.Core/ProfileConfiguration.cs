@@ -25,7 +25,8 @@ public sealed record AppSettings(
     bool CloseToTray = true,
     bool SoundNotifications = true,
     bool DesktopNotifications = true,
-    bool SuppressDonationPrompt = false)
+    bool SuppressDonationPrompt = false,
+    bool PersistentStatusOverlay = false)
 {
     [JsonIgnore] public GlobalHotkey EffectiveVerticalIncreaseHotkey => VerticalIncreaseHotkey ?? new(0x26, HotkeyModifiers.Control | HotkeyModifiers.Shift);
     [JsonIgnore] public GlobalHotkey EffectiveVerticalDecreaseHotkey => VerticalDecreaseHotkey ?? new(0x28, HotkeyModifiers.Control | HotkeyModifiers.Shift);
