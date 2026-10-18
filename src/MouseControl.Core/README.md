@@ -19,7 +19,8 @@ Their enum values 0–4 and `Bezier` value 5 are retained; `Classic` is appended
   activates its effect alongside the selected model. Selecting the matching base model
   already activates that effect; setting its flag does not apply it twice. Nonzero commanded
   components retain their sign; a component commanded to zero may vary laterally.
-  The application's Nonlinearity option uses `CorrectionsOverlay`; it adds no JSON field.
+  The application's Nonlinearity option uses `CorrectionsOverlay`, serialized as
+  `correctionsOverlay`.
   Classic without either effect matches the exact Humanization-zero baseline at every
   strength and seed. Selected effects still use Humanization to scale their contribution.
 - Nonpositive dt produces zero. Nonfinite dt throws. A dt above 100 ms resets onset and
@@ -32,7 +33,10 @@ Their enum values 0–4 and `Bezier` value 5 are retained; `Classic` is appended
   hold when optional `RandomizeOnActivation` is true. `HorizontalSpread`/`VerticalSpread`
   default to 15 input units/s in either direction; `HumanizationSpread` defaults to 10
   upward percentage points. Uniform sampling uses the clipped valid intervals. Base settings
-  are immutable; sample once before creating the hold's generator and discard on release.
+  are immutable; sample once when a hold is accepted, before creating its generator, and
+  discard the sample on release. The enable flag and three spreads are optional persisted
+  motion fields; older profiles default to randomization off and the listed spread defaults.
+  Spread values remain in the profile while randomization is off.
 - Serialize runtime calls on one owner thread. On profile changes, invalidate the gate and
   reset the generator. When activation stops, reset the generator and discard the consumer's
   fractional input-unit carry. Integer rounding/input injection belongs to the application.
@@ -131,10 +135,13 @@ preference; enabled/armed state remains transient and always starts disabled.
 `verticalIncreaseHotkey` and `verticalDecreaseHotkey` are optional/nullable. Missing or null
 values use Ctrl + Shift + Up/Down. `verticalStep` defaults to 50 and accepts whole values 1–2000.
 `closeToTray`, `soundNotifications`, and `desktopNotifications` are optional and default to
-true. `suppressDonationPrompt` defaults to false. These remain version-one optional fields;
+true. `suppressDonationPrompt` and `persistentStatusOverlay` default to false. These remain version-one optional fields;
 older application versions that reject unknown fields cannot read a newly saved document.
 `pulseOverlay` and `correctionsOverlay` are optional when reading older motion settings and
-default to false. All seven model names and both overlay flags roundtrip in version 1.
+default to false. `randomizeOnActivation` also defaults to false. `horizontalSpread` and
+`verticalSpread` default to 15 and accept finite values from 0 to 2000 input units/s;
+`humanizationSpread` defaults to 10 and accepts finite values from 0 to 100 percentage points.
+All seven model names, both effect flags and randomization settings roundtrip in version 1.
 
 IDs are nonempty and unique; names may repeat. At least one profile
 must exist, and the active ID must refer to one. Colors use `#RRGGBB`. Activation values are

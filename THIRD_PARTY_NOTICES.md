@@ -1,6 +1,7 @@
 # Third-party notices
 
-MouseControl is developed by **SleNdd**.
+Original MouseControl code is licensed under [MIT](LICENSE), copyright © 2026 SleNdd.
+Third-party components below retain their own copyright and license notices.
 
 ## NAudio audio playback
 
@@ -29,12 +30,11 @@ and output scheduler. Browser automation and upstream timestamp generation are n
 
 GhostCursorSharp describes itself as a .NET port of
 [Xetera/ghost-cursor](https://github.com/Xetera/ghost-cursor). The original repository's
-[`LICENSE`](https://github.com/Xetera/ghost-cursor/blob/master/LICENSE) states MIT and
-attributes copyright to Xetera (2021). Its current [`package.json`](https://github.com/Xetera/ghost-cursor/blob/master/package.json)
-declares `ISC`; this metadata conflict is unresolved. MouseControl adapts geometry from the
-pinned GhostCursorSharp source above and does not include the original JavaScript or its
-browser integration.
+[`LICENSE`](https://github.com/Xetera/ghost-cursor/blob/master/LICENSE) is the source of the
+retained MIT attribution to Xetera (2021). MouseControl adapts geometry from the pinned
+GhostCursorSharp source above and does not include the original JavaScript or its browser
+integration.
 
 The original MIT notice is also retained in
 `src/MouseControl.Core/ThirdParty/LICENSE.GhostCursor.txt`. Both MIT notices are embedded in
-the executable and displayed in **Settings → Third-party license**.
+the executable and displayed in **Settings → Third-party licenses**.

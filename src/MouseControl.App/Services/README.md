@@ -33,8 +33,13 @@ The waitable timer API is documented by Microsoft in
 and [SetWaitableTimer](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-setwaitabletimer).
 
 Each fresh active transition constructs a generator with a new seed from `Random.Shared`.
-An optional seed provider supports deterministic development checks. Humanization zero remains
-seed independent. Normal status strings are `Idle`, `Active`, `Paused`, and `Disabled`.
+When `RandomizeOnActivation` is enabled, `ActivationRandomizer.Sample` uses that seed to
+choose the hold's effective settings before constructing the generator. That immutable set
+is retained until release; stopping clears it. `EffectiveMotionSettings` exposes the active
+set under the state lock, or the saved base settings when inactive. Sampling does not mutate
+profiles, consume an additional hold seed or change disabled-randomization output.
+An optional seed provider supports deterministic development checks. Normal status strings
+are `Idle`, `Active`, `Paused`, and `Disabled`.
 
 The runtime pauses while its own process is foreground or `SetSuspended(true)` is in force.
 Logical L/R activation honors swapped buttons; Alt and Shift use generic modifier state.
@@ -88,7 +93,8 @@ not target-application processing. See the [firmware setup and protocol](../../.
 
 `WindowBridge` must be created, called, and disposed on the HWND owner thread. It owns the
 rooted subclass delegate, hotkey registrations, WTS registration, and tray icon. The shared
-IDI_APPLICATION icon requires no DestroyIcon. Menus are destroyed in a finally block. Global
+IDI_APPLICATION icon is system-owned; a separately loaded mask icon is destroyed on disposal.
+Menus are destroyed in a finally block. Global
 hotkey updates register a distinct candidate with MOD_NOREPEAT before removing the old one;
 failure preserves the old binding. Tray menus publish suspension on both open and close.
 Vertical bindings use a separate pair of candidate IDs; both candidates must register before
@@ -102,6 +108,19 @@ notifications. Public `Show()`/`Hide()` do not emit those events recursively.
 Availability failures are exposed through `AvailabilityError` and `AvailabilityChanged`;
 the UI must display them. `TrayAvailable` and `HotkeyAvailable` describe current integration.
 Native tray, hotkey, session, and input integration require separate Windows verification.
+
+## Desktop feedback
+
+`DesktopFeedbackService` owns transient layered notification windows on the UI thread.
+On/Off messages include the signed vertical value; their sound kind is selected before
+formatting that display text. The windows do not activate or intercept mouse input.
+
+`DesktopStatusOverlay` owns a separate unowned, topmost, click-through label. Its 9-DIP text
+has a dark outline, 20% opacity and a 2-DIP margin from the primary display's top-left corner.
+The persisted `PersistentStatusOverlay` option defaults to false. The UI updates its text
+from `EffectiveMotionSettings` when runtime status or profile values change, so active
+randomized holds display their selected vertical speed. Hiding the main window does not
+hide the label; disabling the option hides it. Disposal destroys its native window and font.
 
 ## Development checks
 
@@ -119,3 +138,7 @@ The service harness is excluded by the application's hidden-directory source glo
 ```powershell
 dotnet run --project src/MouseControl.App/Services/.checks/ServiceChecks.csproj -c Release
 ```
+
+The service harness contains 31 checks. The separate firmware protocol checks are under
+`firmware/MouseControlLeonardo/.checks`; AVR compilation and physical-device behavior are not
+covered by this host harness.

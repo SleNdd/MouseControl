@@ -1,7 +1,5 @@
 # MouseControl Leonardo firmware
 
-Author: **SleNdd**.
-
 This sketch receives relative cursor commands from MouseControl over the Leonardo's USB
 serial port and submits them through Arduino's standard `Mouse` library. The default build uses
 the board's normal USB identity. It sends no clicks, wheel input, or keyboard input. Movement occurs only
@@ -42,6 +40,10 @@ signed −127 to +127; larger app deltas are split into at most two commands. ST
 barrier with no movement. A failed checksum, stale sequence, wrong connection nonce, unsupported
 command, or invalid component produces no movement. The host closes an uncertain connection
 without resending a MOVE whose outcome is unknown.
+
+MouseControl's requested host output choices are 125, 250, 500, and 1000 Hz. The serial
+acknowledgement round trip can reduce the achieved command rate. These settings do not promise
+USB polling cadence or delivery of every command to another application.
 
 ## Protocol version 1
 

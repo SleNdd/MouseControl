@@ -1,7 +1,5 @@
 # Motion models and timing
 
-Author: **SleNdd**.
-
 ## Controls and composition
 
 Horizontal and Vertical specify commanded relative input units per second, from −2000 to
@@ -26,12 +24,19 @@ map to Classic with their matching switch enabled. Smooth, Organic and Wind map 
 when strength is nonzero, or Classic at zero. Existing flags, profile metadata and commanded
 velocities are preserved. Existing Classic and Bezier profiles are unchanged.
 
+The **Randomize** option samples X and Y once for each accepted activation hold, within the
+configured symmetric spreads in units/second. It samples Humanization upward by its configured
+spread in percentage points. Samples are clipped to valid ranges and discarded on release.
+The option and spread values are per-profile settings; older files omit them and use
+randomization off, X/Y spreads of 15 units/second, and a Humanization spread of 10 points.
+
 ## Parameter changes
 
 Speed and direction changes are correlated over time. Their random targets and hold durations
 evolve within bounded ranges; a fixed 100 ms target-update cycle is not used. Pulse cycles and
 pause durations vary, and correction phase remains continuous as its period changes.
-Each fresh activation obtains a new seed. A given seed and settings reproduce a trajectory.
+Each fresh activation obtains a new seed for motion generation. Randomized activation settings
+also use a separate seeded sample; a given seed and settings reproduce each result.
 
 Bezier adapts the cubic curve and one-sided random-anchor geometry from
 [GhostCursorSharp](https://github.com/openbullet/GhostCursorSharp). It uses signed relative
@@ -39,7 +44,8 @@ segments, an injected seeded random source, direction-based anchor ordering and 
 vector derivatives. This is a continuous-motion adaptation; it does not use upstream browser
 automation or timestamp generation. Attribution and the MIT license are included in
 [third-party notices](../THIRD_PARTY_NOTICES.md) and the executable's Settings dialog.
-The [upstream comparison](UPSTREAM_REVIEW.md) records the reviewed original and port revisions.
+The [third-party notices](../THIRD_PARTY_NOTICES.md#ghostcursorsharp-geometry) record the
+pinned port revision and local geometry adaptation.
 
 The integration grid is 200 Hz. Displacement is integrated across grid cells using the actual
 elapsed time, independently of how the output timer partitions that time. A gap exceeding

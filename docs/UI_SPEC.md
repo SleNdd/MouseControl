@@ -1,19 +1,20 @@
 # MouseControl: UI and interaction specification
 
-Author: **SleNdd**. Date: **2026-10-13**.
+Current WinUI interface behavior. See the [screenshots](screenshots/README.md) and
+[user guide](USAGE.md) for the visible controls and their use.
 
 ## Window and appearance
 
-The initial window target is **720 × 500 effective pixels**, scaled for Windows DPI. The window
-is fixed in size and uses native window controls. The direction pad is **236 × 236**. The layout
-uses Segoe UI, Fluent controls, modest rounding, and Desktop Acrylic with Windows-managed
-material fallback.
+The window is fixed at **720 × 500 effective pixels**, scaled for Windows DPI, with native
+window controls. The direction pad is **236 × 236**. The layout uses Segoe UI and Fluent
+controls. The main window follows the system theme and accent color.
 
 Follow Windows light/dark appearance and system accent changes. Sliders and the direction
 drawing use the accent; profile colors remain independent markers. Text, controls, and the
 direction handle stay opaque. Reduced-animation settings leave a static preview trace.
 
-All interface text is English. The underlined corner link **prod. by SleNdd** opens
+Application labels are English; native controls follow Windows localization.
+The underlined corner link **prod. by SleNdd** opens
 `https://github.com/SleNdd` and uses readable theme foreground colors.
 
 ## Profiles
@@ -32,14 +33,17 @@ an inert default. Switching, editing, or deleting profiles stops the current mot
 requires a fresh activation hold.
 
 Per-profile settings are name, color, X/Y components, Humanization, activation binding, model,
-and pulse/correction effect flags. The global toggle hotkey, input backend, Arduino port,
-output rate, startup-in-tray preference and active profile ID are application settings.
-Enabled and pressed state are transient. Edits save after a short debounce; normal
-exit flushes pending changes. Errors are visible and preserve the previous settings document.
+pulse/correction effect flags, and randomization enablement and spreads. Global application
+settings include toggle and vertical hotkeys, vertical step, input backend and Arduino port,
+requested output rate, startup-in-tray and close-to-tray preferences, sound and desktop
+notifications, the persistent status overlay, support-prompt suppression, and active profile
+ID. Enabled and pressed state are transient. Edits save after a short debounce; normal exit
+flushes pending changes. Settings save errors are visible and preserve the previous file.
 
 ## Main controls
 
-Exactly three sliders have matching editable numeric fields:
+The main panel has three sliders with editable numeric fields. When per-hold randomization is
+enabled, additional spread fields appear alongside the X, Y, and Humanization values:
 
 Numeric fields omit spin buttons and the inline clear button. Typing and keyboard
 adjustments remain available.
@@ -54,8 +58,14 @@ Arrow keys adjust a focused slider by one input unit/second. Numeric values are 
 double-click resets an axis slider to zero. All axis controls and the direction pad share
 one X/Y state.
 
-The footer selects **Classic** or **Bezier**, with independent inline **Pulse** and
-**Nonlinearity** checkboxes. The Humanization slider scales the mode and selected effects.
+The **Randomize** option samples X/Y within their configured symmetric spreads in
+input units/second, clipped to the valid speed range. The upward Humanization spread is in
+percentage points and is clipped at 100%. Defaults are ±15 units/s for each axis and +10
+percentage points. Spread values remain saved when randomization is turned off. Each accepted
+activation hold samples once; releasing ends that sample.
+
+The footer selects **Classic** or **Bezier**, with independent inline **Pulse**,
+**Nonlinearity** and **Randomize** checkboxes. The Humanization slider scales the mode and selected effects.
 For Classic with both effects off, strength controls are disabled while their value is
 retained. Legacy model migration is described in [motion models](MOTION_MODELS.md).
 
@@ -72,6 +82,11 @@ The Arduino-only footer indicator is green **Online** after firmware identificat
 seconds and stops once connected. USB notifications and submission failures disconnect the
 backend and disable movement. No idle heartbeat is sent; Online records the established
 connection rather than continually measured device health. Reconnection leaves motion disabled.
+
+Settings also include the optional **Always show status and vertical speed** desktop overlay.
+When enabled it displays the current enabled state and effective signed vertical rate as a
+click-through desktop label. It is separate from the short-lived profile-colored feedback
+panels.
 
 ## Direction pad and preview
 
@@ -130,7 +145,7 @@ It does not enable movement at startup.
 
 Click or double-click the icon to show the window. Right-click opens a native menu containing:
 
-- **Show MouseControl**
+- **Show <process name>**, or **Show MouseControl** when no alternate identity is selected
 - **Enabled**, checked when the master switch is on
 - Current status
 - **Profiles**, with the active profile checked
@@ -141,6 +156,10 @@ recreates the icon. The icon remains present while the main window is visible.
 The title-bar close button saves and hides to the tray by default. Settings can disable this
 behavior. Tray **Exit** stops output, saves pending settings, and closes the application.
 
+The published launcher extracts its bundled app payload to a runtime cache. When it finds a
+usable running process and icon, it applies that process name and icon to the
+extracted executable and window. The `--no-mask` option disables this behavior.
+
 ## Feedback and support prompt
 
 Settings contain **Vertical +**, **Vertical −**, and a step of 1–2000 units/s (default 50).
@@ -148,12 +167,13 @@ The default chords are Ctrl + Shift + Up/Down. These adjust the signed vertical 
 the existing range and rearm motion after the edit. Key capture pauses motion; conflicts or
 registration failures preserve previous bindings.
 
-On/Off and vertical changes produce distinct sound cues and profile-colored panels. Panels
+On/Off and vertical changes produce distinct sound cues and profile-colored panels. On/Off
+panels also include the signed vertical speed. Panels
 are 220 × 54 effective pixels, flush to the current screen's left edge, 72 effective pixels
 below the work area's top. A tinted surface, fine border, narrow shadow, and transparency
 follow dark/light appearance. Panels slide and stack downwards, with up to four visible.
 They do not take focus or intercept clicks. Both sounds and panels can be disabled.
 
-The voluntary support dialog currently contains WIP text. Close and Escape are unavailable
-for five seconds after it opens. It appears on every startup until the persisted **Don't ask
-again** preference is selected. It does not contain a payment action.
+The voluntary support dialog currently contains placeholder text. It appears at startup until
+the persisted **Don't ask again** preference is selected. Its primary action is unavailable
+for five seconds after opening.
