@@ -15,6 +15,8 @@ var tests = new List<(string Name, Action Run)>
     ("timer gaps do not catch up", TimerGaps),
     ("invalid settings leave generator unchanged", InvalidMotion),
     ("activation enable/edit/suspend rearm", ActivationRearm),
+    ("activation spread defaults, bounds and independent seeded samples", ActivationSampling),
+    ("activation spread persistence retains legacy compatibility", ActivationSamplingPersistence),
     ("profile roundtrip and stable identifiers", ProfileRoundtrip),
     ("corrupt and unsupported documents are preserved", CorruptPreservation),
     ("invalid save preserves previous document", InvalidSave),
@@ -72,7 +74,8 @@ static void ProtectedMetadata()
     Assert(type.GetMethod("NextVelocity", BindingFlags.Instance | BindingFlags.NonPublic) is null,
         "Protected Core retains the original private NextVelocity name.");
     AssertConstructorParameters(typeof(MotionSettings),
-        "X", "Y", "Humanization", "MaxComponentRate", "Model", "PulseOverlay", "CorrectionsOverlay");
+        "X", "Y", "Humanization", "MaxComponentRate", "Model", "PulseOverlay", "CorrectionsOverlay",
+        "RandomizeOnActivation", "HorizontalSpread", "VerticalSpread", "HumanizationSpread");
     AssertConstructorParameters(typeof(AppSettings),
         "ToggleHotkey", "ActiveProfileId", "InputBackend", "ArduinoPort", "OutputRateHz", "StartInTray",
         "VerticalIncreaseHotkey", "VerticalDecreaseHotkey", "VerticalStep", "CloseToTray", "SoundNotifications", "DesktopNotifications", "SuppressDonationPrompt", "PersistentStatusOverlay");
@@ -307,6 +310,91 @@ static void ActivationRearm()
     gate.SetEnabled(true);
     Assert(!gate.Step(true, false), "Disabled release incorrectly armed gate.");
 }
+
+static void ActivationSampling()
+{
+    var defaults = new MotionSettings();
+    Assert(!defaults.RandomizeOnActivation && defaults.HorizontalSpread == 15 && defaults.VerticalSpread == 15 &&
+        defaults.HumanizationSpread == 10, "Activation spread defaults changed.");
+    var settings = new MotionSettings(.12345, -.23456, .37654, 2000, MotionModel.Bezier, true, true, true);
+    var disabled = settings with { RandomizeOnActivation = false };
+    Assert(ReferenceEquals(ActivationRandomizer.Sample(disabled, 7), disabled), "Disabled sampling replaced base settings.");
+    var zero = settings with { HorizontalSpread = 0, VerticalSpread = 0, HumanizationSpread = 0 };
+    Assert(ActivationRandomizer.Sample(zero, 1) == zero, "Zero spread changed decimal base values.");
+    foreach (var seed in Enumerable.Range(0, 400))
+    {
+        var random = new Random(seed);
+        var sample = ActivationRandomizer.Sample(settings, seed);
+        Near(sample.X, (settings.X * 2000 - 15 + random.NextDouble() * 30) / 2000);
+        Near(sample.Y, (settings.Y * 2000 - 15 + random.NextDouble() * 30) / 2000);
+        Near(sample.Humanization, settings.Humanization + random.NextDouble() * .1);
+        Assert(sample == ActivationRandomizer.Sample(settings, seed), "Same hold seed did not reproduce the sample.");
+        Assert(sample with { X = settings.X, Y = settings.Y, Humanization = settings.Humanization } == settings,
+            "Sampling changed saved metadata or spread parameters.");
+    }
+    var samples = Enumerable.Range(0, 100).Select(seed => ActivationRandomizer.Sample(settings, seed)).ToArray();
+    Assert(samples.Select(s => s.X).Distinct().Count() > 90 && samples.Select(s => s.Y).Distinct().Count() > 90 &&
+        samples.Select(s => s.Humanization).Distinct().Count() > 90, "Fresh seeds do not vary each component.");
+    foreach (var maximum in new[] { .01, 150, 2000 })
+    foreach (var axis in new[] { -1.0, -.999, 0, .999, 1.0 })
+    foreach (var humanization in new[] { 0, .95, 1.0 })
+    {
+        var edge = settings with { X = axis, Y = -axis, Humanization = humanization, MaxComponentRate = maximum,
+            HorizontalSpread = 2000, VerticalSpread = 2000, HumanizationSpread = 100 };
+        foreach (var seed in Enumerable.Range(0, 40))
+        {
+            var sample = ActivationRandomizer.Sample(edge, seed);
+            sample.Validate();
+            Assert(sample.X is > -1 and < 1 && sample.Y is > -1 and < 1,
+                "Pre-clipped axis interval created a boundary point mass.");
+            Assert(sample.Humanization >= humanization && sample.Humanization <= 1,
+                "Humanization left its one-sided bounded interval.");
+        }
+    }
+    var clipped = settings with { X = 1, Y = -1, Humanization = .98 };
+    var expectedRandom = new Random(29);
+    var clippedSample = ActivationRandomizer.Sample(clipped, 29);
+    Near(clippedSample.X, (1985 + expectedRandom.NextDouble() * 15) / 2000);
+    Near(clippedSample.Y, (-2000 + expectedRandom.NextDouble() * 15) / 2000);
+    Near(clippedSample.Humanization, .98 + expectedRandom.NextDouble() * .02);
+    foreach (var invalid in new[] { double.NaN, double.NegativeInfinity, double.PositiveInfinity, -1, 2001 })
+    {
+        AssertThrows<ArgumentOutOfRangeException>(() => ActivationRandomizer.Sample(settings with { HorizontalSpread = invalid }, 1));
+        AssertThrows<ArgumentOutOfRangeException>(() => ActivationRandomizer.Sample(settings with { VerticalSpread = invalid }, 1));
+    }
+    foreach (var invalid in new[] { double.NaN, double.NegativeInfinity, double.PositiveInfinity, -1, 101 })
+        AssertThrows<ArgumentOutOfRangeException>(() => ActivationRandomizer.Sample(settings with { HumanizationSpread = invalid }, 1));
+}
+
+static void ActivationSamplingPersistence() => WithStore((store, path) =>
+{
+    var source = Sample();
+    var updated = source with { Profiles = source.Profiles.Select(p => p with { Motion = p.Motion with {
+        RandomizeOnActivation = true, HorizontalSpread = 24.75, VerticalSpread = 0, HumanizationSpread = 7.25 } }).ToArray() };
+    Assert(store.Save(updated).Success && store.Load().Configuration!.Profiles.SequenceEqual(updated.Profiles),
+        "Activation parameters or decimal base settings did not roundtrip.");
+    var bytes = File.ReadAllBytes(path);
+    foreach (var invalid in new[] { updated.Profiles[0].Motion with { HorizontalSpread = double.NaN },
+        updated.Profiles[0].Motion with { VerticalSpread = 2001 }, updated.Profiles[0].Motion with { HumanizationSpread = 101 } })
+    {
+        var rejected = updated with { Profiles = new[] { updated.Profiles[0] with { Motion = invalid }, updated.Profiles[1] } };
+        Assert(!store.Save(rejected).Success && File.ReadAllBytes(path).SequenceEqual(bytes),
+            "Invalid spread save changed the existing document.");
+    }
+    var document = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+    foreach (var profile in document["profiles"]!.AsArray())
+    foreach (var field in new[] { "randomizeOnActivation", "horizontalSpread", "verticalSpread", "humanizationSpread" })
+        profile!["motion"]!.AsObject().Remove(field);
+    File.WriteAllText(path, document.ToJsonString());
+    var legacy = store.Load();
+    Assert(legacy.Success && legacy.Configuration!.Profiles.SequenceEqual(source.Profiles),
+        "Legacy profiles did not retain base values and optional defaults.");
+    document["profiles"]![0]!["motion"]!["horizontalSpread"] = -1;
+    File.WriteAllText(path, document.ToJsonString());
+    var invalidBytes = File.ReadAllBytes(path);
+    Assert(!store.Load().Success && !store.Save(updated).Success && File.ReadAllBytes(path).SequenceEqual(invalidBytes),
+        "Invalid loaded spread was accepted or overwritten.");
+});
 
 static void WithStore(Action<ProfileStore, string> test)
 {

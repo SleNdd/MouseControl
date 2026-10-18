@@ -21,7 +21,11 @@ public sealed record MotionSettings(
     [property: JsonRequired] double MaxComponentRate = 150,
     [property: JsonRequired] MotionModel Model = MotionModel.Classic,
     bool PulseOverlay = false,
-    bool CorrectionsOverlay = false)
+    bool CorrectionsOverlay = false,
+    bool RandomizeOnActivation = false,
+    double HorizontalSpread = 15,
+    double VerticalSpread = 15,
+    double HumanizationSpread = 10)
 {
     public void Validate()
     {
@@ -35,6 +39,12 @@ public sealed record MotionSettings(
             throw new ArgumentOutOfRangeException(nameof(MaxComponentRate));
         if (!Enum.IsDefined(Model))
             throw new ArgumentOutOfRangeException(nameof(Model));
+        if (!double.IsFinite(HorizontalSpread) || HorizontalSpread is < 0 or > 2000)
+            throw new ArgumentOutOfRangeException(nameof(HorizontalSpread));
+        if (!double.IsFinite(VerticalSpread) || VerticalSpread is < 0 or > 2000)
+            throw new ArgumentOutOfRangeException(nameof(VerticalSpread));
+        if (!double.IsFinite(HumanizationSpread) || HumanizationSpread is < 0 or > 100)
+            throw new ArgumentOutOfRangeException(nameof(HumanizationSpread));
     }
 }
 

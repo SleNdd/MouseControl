@@ -62,6 +62,7 @@ public partial class App : Application
                 var bigIcon = SendMessage(hwnd, 0x7F, 1, 0);
                 var processName = Process.GetCurrentProcess().ProcessName;
                 var desktopFeatures = _window!.VerifyDesktopFeatures();
+                var spreadControls = _window.VerifySpreadControls();
                 var success = _window!.Title == (Mask?.ProcessName ?? "MouseControl")
                     && (Mask is null || processName == Mask.ProcessName)
                     && (Mask is null || (smallIcon != 0 && bigIcon != 0))
@@ -72,7 +73,7 @@ public partial class App : Application
                     WindowTitle = _window.Title, HasSmallWindowIcon = smallIcon != 0,
                     HasBigWindowIcon = bigIcon != 0, TrayAvailable = _window.MaskTrayAvailable,
                     HasTrayIcon = _window.MaskTrayIcon != 0, Mask = Mask?.ProcessName,
-                    DesktopFeatures = desktopFeatures
+                    DesktopFeatures = desktopFeatures, SpreadControls = spreadControls
                 });
             }
             catch (Exception ex) { WriteVerification(new { Success = false, Error = ex.ToString() }); }

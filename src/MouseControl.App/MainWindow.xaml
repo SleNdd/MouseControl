@@ -15,25 +15,37 @@
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="236"/></Grid.ColumnDefinitions>
       <StackPanel Spacing="16" VerticalAlignment="Center">
         <StackPanel Spacing="2">
-          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="112"/></Grid.ColumnDefinitions>
+          <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="104"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <TextBlock Text="Vertical" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
             <NumberBox x:Name="VerticalNumber" Grid.Column="1" Minimum="-2000" Maximum="2000" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="Number_Changed" AutomationProperties.Name="Vertical speed in input units per second"/>
+            <StackPanel x:Name="VerticalSpreadPanel" Grid.Column="2" Orientation="Horizontal" Spacing="5" Visibility="Collapsed">
+              <TextBlock Text="±" VerticalAlignment="Center" Opacity="0.7"/>
+              <NumberBox x:Name="VerticalSpreadNumber" Width="72" MinWidth="0" Minimum="0" Maximum="2000" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="SpreadNumber_Changed" ToolTipService.ToolTip="Vertical spread in units/s, below and above the base value." AutomationProperties.Name="Vertical speed spread"/>
+            </StackPanel>
           </Grid>
           <Slider x:Name="VerticalSlider" Minimum="-2000" Maximum="2000" StepFrequency="1" ValueChanged="Slider_Changed" DoubleTapped="Vertical_Reset" AutomationProperties.Name="Vertical: up to down"/>
           <Grid><TextBlock Text="Up −2000" FontSize="11" Opacity="0.65"/><TextBlock Text="units/s" FontSize="11" Opacity="0.65" HorizontalAlignment="Center"/><TextBlock Text="+2000 Down" FontSize="11" Opacity="0.65" HorizontalAlignment="Right"/></Grid>
         </StackPanel>
         <StackPanel Spacing="2">
-          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="112"/></Grid.ColumnDefinitions>
+          <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="104"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <TextBlock Text="Horizontal" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
             <NumberBox x:Name="HorizontalNumber" Grid.Column="1" Minimum="-2000" Maximum="2000" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="Number_Changed" AutomationProperties.Name="Horizontal speed in input units per second"/>
+            <StackPanel x:Name="HorizontalSpreadPanel" Grid.Column="2" Orientation="Horizontal" Spacing="5" Visibility="Collapsed">
+              <TextBlock Text="±" VerticalAlignment="Center" Opacity="0.7"/>
+              <NumberBox x:Name="HorizontalSpreadNumber" Width="72" MinWidth="0" Minimum="0" Maximum="2000" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="SpreadNumber_Changed" ToolTipService.ToolTip="Horizontal spread in units/s, below and above the base value." AutomationProperties.Name="Horizontal speed spread"/>
+            </StackPanel>
           </Grid>
           <Slider x:Name="HorizontalSlider" Minimum="-2000" Maximum="2000" StepFrequency="1" ValueChanged="Slider_Changed" DoubleTapped="Horizontal_Reset" AutomationProperties.Name="Horizontal: left to right"/>
           <Grid><TextBlock Text="Left −2000" FontSize="11" Opacity="0.65"/><TextBlock Text="units/s" FontSize="11" Opacity="0.65" HorizontalAlignment="Center"/><TextBlock Text="+2000 Right" FontSize="11" Opacity="0.65" HorizontalAlignment="Right"/></Grid>
         </StackPanel>
         <StackPanel Spacing="2">
-          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="84"/></Grid.ColumnDefinitions>
+          <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="104"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <TextBlock Text="Humanization" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
             <NumberBox x:Name="HumanNumber" Grid.Column="1" Minimum="0" Maximum="100" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="Number_Changed" AutomationProperties.Name="Humanization percent"/>
+            <StackPanel x:Name="HumanSpreadPanel" Grid.Column="2" Orientation="Horizontal" Spacing="5" Visibility="Collapsed">
+              <TextBlock Text="+" VerticalAlignment="Center" Opacity="0.7"/>
+              <NumberBox x:Name="HumanSpreadNumber" Width="72" MinWidth="0" Minimum="0" Maximum="100" SmallChange="1" SpinButtonPlacementMode="Hidden" Loaded="Number_Loaded" ValueChanged="SpreadNumber_Changed" ToolTipService.ToolTip="Humanization spread in percentage points, from the base value upwards." AutomationProperties.Name="Humanization upward spread"/>
+            </StackPanel>
           </Grid>
           <Slider x:Name="HumanSlider" Minimum="0" Maximum="100" StepFrequency="1" ValueChanged="Slider_Changed" AutomationProperties.Name="Humanization strength"/>
           <Grid><TextBlock Text="0%" FontSize="11" Opacity="0.65"/><TextBlock Text="100%" FontSize="11" Opacity="0.65" HorizontalAlignment="Right"/></Grid>
@@ -61,17 +73,19 @@
       <Button Grid.Column="4" Click="Settings_Click" ToolTipService.ToolTip="Settings" AutomationProperties.Name="Settings"><SymbolIcon Symbol="Setting"/></Button>
       <Button Grid.Column="5" Click="Tray_Click" ToolTipService.ToolTip="Minimize to tray" AutomationProperties.Name="Minimize to tray"><FontIcon Glyph="&#xE8A7;"/></Button>
     </Grid>
-    <Grid Grid.Row="4" Margin="22,4,22,10">
-      <StackPanel Orientation="Horizontal" Spacing="14">
+    <Grid Grid.Row="4" Margin="22,4,22,10" ColumnSpacing="12">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <StackPanel Orientation="Horizontal" Spacing="10">
         <ComboBox x:Name="ModelCombo" MinWidth="126" FontSize="11" MinHeight="28" SelectionChanged="Model_Changed" AutomationProperties.Name="Humanization algorithm"/>
         <CheckBox x:Name="PulseEffectCheck" Content="Pulse" MinWidth="0" MinHeight="28" FontSize="11" Checked="Effects_Changed" Unchecked="Effects_Changed" ToolTipService.ToolTip="Vary movement in smooth bursts. Uses Humanization strength."/>
         <CheckBox x:Name="CorrectionEffectCheck" Content="Nonlinearity" MinWidth="0" MinHeight="28" FontSize="11" Checked="Effects_Changed" Unchecked="Effects_Changed" ToolTipService.ToolTip="Add changes in direction and speed. Uses Humanization strength."/>
+        <CheckBox x:Name="RandomizeCheck" Content="Randomize" MinWidth="0" MinHeight="28" FontSize="11" Checked="Randomize_Changed" Unchecked="Randomize_Changed" ToolTipService.ToolTip="Choose new values once per activation hold. Speeds use ±spread; Humanization increases by up to its spread."/>
         <StackPanel x:Name="ArduinoStatus" Orientation="Horizontal" Spacing="6" Visibility="Collapsed" VerticalAlignment="Center">
           <Ellipse x:Name="ArduinoLamp" Width="7" Height="7" VerticalAlignment="Center"/>
           <TextBlock x:Name="ArduinoStatusText" Text="Offline" FontSize="11"/>
         </StackPanel>
       </StackPanel>
-      <HyperlinkButton NavigateUri="https://github.com/SleNdd" Foreground="{ThemeResource TextFillColorPrimaryBrush}" FontSize="11" Padding="0" MinHeight="24" HorizontalAlignment="Right" VerticalAlignment="Center" ToolTipService.ToolTip="Open SleNdd on GitHub" AutomationProperties.Name="prod. by SleNdd — GitHub">
+      <HyperlinkButton x:Name="CreditLink" Grid.Column="1" NavigateUri="https://github.com/SleNdd" Foreground="{ThemeResource TextFillColorPrimaryBrush}" FontSize="11" Padding="0" MinHeight="24" HorizontalAlignment="Right" VerticalAlignment="Center" ToolTipService.ToolTip="Open SleNdd on GitHub" AutomationProperties.Name="prod. by SleNdd — GitHub">
         <TextBlock Text="prod. by SleNdd" TextDecorations="Underline" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
       </HyperlinkButton>
     </Grid>

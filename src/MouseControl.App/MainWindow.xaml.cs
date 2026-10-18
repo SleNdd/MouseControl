@@ -143,7 +143,7 @@ public sealed partial class MainWindow : Window
         RebuildPreview();
         DispatcherQueue.TryEnqueue(() =>
         {
-            foreach (var number in new[] { VerticalNumber, HorizontalNumber, HumanNumber })
+            foreach (var number in new[] { VerticalNumber, HorizontalNumber, HumanNumber, VerticalSpreadNumber, HorizontalSpreadNumber, HumanSpreadNumber })
                 if (number.IsLoaded) HideNumericClearButton(number);
         });
     }
@@ -183,6 +183,12 @@ public sealed partial class MainWindow : Window
         HorizontalSlider.Value = Math.Round(motion.X * MotionUi.MaximumSpeed);
         HorizontalNumber.Value = Math.Round(motion.X * MotionUi.MaximumSpeed, 2);
         HumanSlider.Value = HumanNumber.Value = Math.Round(motion.Humanization * 100);
+        RandomizeCheck.IsChecked = motion.RandomizeOnActivation;
+        VerticalSpreadNumber.Value = motion.VerticalSpread;
+        HorizontalSpreadNumber.Value = motion.HorizontalSpread;
+        HumanSpreadNumber.Value = motion.HumanizationSpread;
+        VerticalSpreadPanel.Visibility = HorizontalSpreadPanel.Visibility = HumanSpreadPanel.Visibility =
+            motion.RandomizeOnActivation ? Visibility.Visible : Visibility.Collapsed;
         ActivationCombo.SelectedIndex = (int)Current.Activation;
         HotkeyButton.Content = _capturing ? "Press a key…" : FormatHotkey(_configuration.AppSettings.ToggleHotkey);
         ModelCombo.SelectedItem = motion.Model;
@@ -190,6 +196,7 @@ public sealed partial class MainWindow : Window
         PulseEffectCheck.IsChecked = motion.PulseOverlay;
         CorrectionEffectCheck.IsChecked = motion.CorrectionsOverlay;
         HumanSlider.IsEnabled = HumanNumber.IsEnabled = motion.Model != MotionModel.Classic || motion.PulseOverlay || motion.CorrectionsOverlay;
+        HumanSpreadNumber.IsEnabled = HumanNumber.IsEnabled;
         ToolTipService.SetToolTip(HumanSlider, HumanSlider.IsEnabled
             ? "Strength of the selected model and effects."
             : "Classic moves straight. Enable Pulse or Nonlinearity, or select Bezier to use Humanization.");
@@ -347,6 +354,20 @@ public sealed partial class MainWindow : Window
         else ReplaceProfile(Current with { Motion = Current.Motion with { Humanization = Math.Clamp(args.NewValue, 0, 100) / 100 } });
     }
     private void Vertical_Reset(object sender, DoubleTappedRoutedEventArgs e) { SetVector(Current.Motion.X, 0); e.Handled = true; }
+    private void Randomize_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_updating || _runtime is null) return;
+        ReplaceProfile(Current with { Motion = Current.Motion with { RandomizeOnActivation = RandomizeCheck.IsChecked == true } });
+    }
+    private void SpreadNumber_Changed(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_updating || _runtime is null || !double.IsFinite(args.NewValue)) return;
+        var motion = Current.Motion;
+        if (sender == VerticalSpreadNumber) motion = motion with { VerticalSpread = Math.Clamp(args.NewValue, 0, MotionUi.MaximumSpeed) };
+        else if (sender == HorizontalSpreadNumber) motion = motion with { HorizontalSpread = Math.Clamp(args.NewValue, 0, MotionUi.MaximumSpeed) };
+        else if (sender == HumanSpreadNumber) motion = motion with { HumanizationSpread = Math.Clamp(args.NewValue, 0, 100) };
+        ReplaceProfile(Current with { Motion = motion });
+    }
     private void Horizontal_Reset(object sender, DoubleTappedRoutedEventArgs e) { SetVector(0, Current.Motion.Y); e.Handled = true; }
     private void Model_Changed(object sender, SelectionChangedEventArgs e)
     {

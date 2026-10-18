@@ -28,6 +28,11 @@ Their enum values 0–4 and `Bezier` value 5 are retained; `Classic` is appended
 - `ActivationGate` starts disabled. After enabling, `Invalidate()`, or any suspended step,
   it requires an observed release while enabled and unsuspended, followed by a press.
   Pass the whole activation chord as `held`; release/repress applies to that chord.
+- `ActivationRandomizer.Sample(settings, seed)` selects effective parameters for one accepted
+  hold when optional `RandomizeOnActivation` is true. `HorizontalSpread`/`VerticalSpread`
+  default to 15 input units/s in either direction; `HumanizationSpread` defaults to 10
+  upward percentage points. Uniform sampling uses the clipped valid intervals. Base settings
+  are immutable; sample once before creating the hold's generator and discard on release.
 - Serialize runtime calls on one owner thread. On profile changes, invalidate the gate and
   reset the generator. When activation stops, reset the generator and discard the consumer's
   fractional input-unit carry. Integer rounding/input injection belongs to the application.
@@ -167,7 +172,7 @@ dotnet run --project tests/MouseControl.Core.Tests/MouseControl.Core.Tests.cspro
     -p:IntermediateOutputPath=obj/protected/Release/ -- --protected
 ```
 
-The regular harness has 27 checks. Artifact mode has 25: it retains all public behavior,
+The regular harness has 29 checks. Artifact mode has 27: it retains all public behavior,
 persistence, and license checks, skips three checks that inspect original private field
 names, and adds verification of renamed private members and preserved public constructor
 parameters and enum identities. Native verification must additionally confirm that the

@@ -11,6 +11,7 @@ and .NET 10.
   Humanization strength.
 - A synchronized square direction pad and local motion preview.
 - Classic and Bezier motion modes, with independent Pulse and Nonlinearity switches.
+- Optional per-hold randomization with editable horizontal/vertical and Humanization spreads.
 - Axis speeds from −2000 to +2000 relative input units/second, with one-unit increments.
 - Requested host output rates of 125, 250, 500, or 1000 Hz.
 - Hold-to-activate bindings: LMB, RMB, LMB + RMB, MMB, Alt, or Shift.
@@ -83,6 +84,19 @@ uses the standard `resources.pri` name inside the bundle, independently of the E
 The app starts disabled. Motion pauses while MouseControl is foreground. Enabling, editing,
 switching profiles, or returning from suspension requires release and a fresh activation
 press. Releasing the binding stops movement.
+
+**Randomize**, beside Pulse and Nonlinearity, reveals a second numeric field beside each
+base value. Vertical and horizontal use a symmetric spread, defaulting to ±15 units/s:
+`400 ±15` selects a speed between 385 and 415. Humanization uses an upward spread,
+defaulting to +10 percentage points: `5 +10` selects a strength between 5 and 15%.
+The editable spreads are saved per profile. Set a spread to zero for an exact value.
+
+A fresh accepted activation hold selects one independent uniform value for each parameter
+and keeps that set until release. Sampling stays within the speed limits of −2000…2000 and
+Humanization limits of 0…100%. The base values remain unchanged. Editing or switching a
+profile still requires release and a new press. Turning Randomize off preserves its saved
+spreads and restores exact base values. While holding, the optional corner indicator shows
+the selected vertical speed; between holds it shows the base speed.
 
 Axis values are commanded speeds in relative input units/second. The range is ±2000 per
 axis, with one-unit slider and numeric increments. Existing profiles keep their commanded

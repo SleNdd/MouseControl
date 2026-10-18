@@ -69,7 +69,11 @@ public sealed partial class MainWindow
 
     private void UpdateStatusOverlay()
     {
-        try { _statusOverlay?.Update(_configuration.AppSettings.PersistentStatusOverlay, _runtime.Enabled, Current.Motion.Y * MotionUi.MaximumSpeed); }
+        try
+        {
+            var effective = _runtime.EffectiveMotionSettings;
+            _statusOverlay?.Update(_configuration.AppSettings.PersistentStatusOverlay, _runtime.Enabled, effective.Y * effective.MaxComponentRate);
+        }
         catch (Exception ex)
         {
             _statusOverlay?.Dispose(); _statusOverlay = null;

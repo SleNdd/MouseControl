@@ -14,6 +14,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="RuntimeChecks.txt" />
+    <Compile Include="ActivationSpreadChecks.txt" />
     <Compile Include="BackendChecks.txt" />
     <Compile Include="MotionUiChecks.txt" />
     <Compile Include="WindowsBridgeChecks.txt" />

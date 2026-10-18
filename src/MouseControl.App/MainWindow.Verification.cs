@@ -8,6 +8,50 @@ public sealed partial class MainWindow
     internal bool MaskTrayAvailable => _bridge.TrayAvailable;
     internal nint MaskTrayIcon => _bridge.TrayIconHandle;
 
+    internal object VerifySpreadControls()
+    {
+        void Require(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
+        Require(_smoke, "Spread verification requires a simulated backend.");
+        var original = Current;
+        var originalArduinoVisibility = ArduinoStatus.Visibility;
+        try
+        {
+            ReplaceProfile(Current with { Motion = Current.Motion with
+            {
+                X = .2, Y = .2, Humanization = .05, Model = MouseControl.Core.MotionModel.Bezier,
+                RandomizeOnActivation = false, VerticalSpread = 15, HorizontalSpread = 15, HumanizationSpread = 10
+            } });
+            Require(VerticalSpreadPanel.Visibility == Microsoft.UI.Xaml.Visibility.Collapsed, "Spread fields appear while disabled.");
+            RandomizeCheck.IsChecked = true;
+            Require(Current.Motion.RandomizeOnActivation && VerticalSpreadPanel.Visibility == Microsoft.UI.Xaml.Visibility.Visible
+                && HorizontalSpreadPanel.Visibility == Microsoft.UI.Xaml.Visibility.Visible && HumanSpreadPanel.Visibility == Microsoft.UI.Xaml.Visibility.Visible,
+                "The checkbox did not reveal all spread fields.");
+            Require(VerticalNumber.Value == 400 && HorizontalNumber.Value == 400 && HumanNumber.Value == 5,
+                "Enabling spread changed the saved base values.");
+            Require(VerticalSpreadNumber.Value == 15 && HorizontalSpreadNumber.Value == 15 && HumanSpreadNumber.Value == 10,
+                "The default spread values are incorrect.");
+            VerticalSpreadNumber.Value = 25; HorizontalSpreadNumber.Value = 30; HumanSpreadNumber.Value = 12;
+            Require(Current.Motion.VerticalSpread == 25 && Current.Motion.HorizontalSpread == 30 && Current.Motion.HumanizationSpread == 12,
+                "Editing spread fields did not update the profile.");
+            RandomizeCheck.IsChecked = false;
+            Require(!Current.Motion.RandomizeOnActivation && VerticalSpreadPanel.Visibility == Microsoft.UI.Xaml.Visibility.Collapsed
+                && VerticalNumber.Value == 400 && HumanNumber.Value == 5, "Disabling spread did not restore the exact-value controls.");
+            RandomizeCheck.IsChecked = true;
+            Require(VerticalSpreadNumber.Value == 25 && HorizontalSpreadNumber.Value == 30 && HumanSpreadNumber.Value == 12,
+                "Toggling spread discarded custom widths.");
+            ArduinoStatus.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+            Root.UpdateLayout();
+            double Left(Microsoft.UI.Xaml.FrameworkElement element) => element.TransformToVisual(Root).TransformPoint(new Windows.Foundation.Point()).X;
+            Require(VerticalSpreadNumber.ActualWidth >= 70 && HumanSpreadNumber.ActualWidth >= 70
+                && Left(VerticalNumber) + VerticalNumber.ActualWidth <= Left(VerticalSpreadNumber)
+                && Left(VerticalSpreadNumber) + VerticalSpreadNumber.ActualWidth < Left(PadButton), "Spread fields overlap or are clipped.");
+            Require(RandomizeCheck.ActualWidth > 0 && Left(CorrectionEffectCheck) + CorrectionEffectCheck.ActualWidth <= Left(RandomizeCheck)
+                && Left(ArduinoStatus) + ArduinoStatus.ActualWidth <= Left(CreditLink), "The effects row overlaps its adjacent controls.");
+            return new { Success = true, VerticalDefault = "400 ±15", HumanizationDefault = "5 +10", CustomSpreadsPreserved = true, LayoutFits = true };
+        }
+        finally { ReplaceProfile(original); ArduinoStatus.Visibility = originalArduinoVisibility; }
+    }
+
     // Runs only with --verify-launch, which uses temporary profiles and a simulated backend.
     internal object VerifyDesktopFeatures()
     {

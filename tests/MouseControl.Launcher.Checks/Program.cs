@@ -52,7 +52,7 @@ try
     ExecutableResources.Apply(copy, mask);
     var version = FileVersionInfo.GetVersionInfo(copy);
     Check(version.FileDescription == "brave" && version.ProductName == "MouseControl" && version.OriginalFilename == "brave.exe", "Native EXE description/name are updated and keep our product identity");
-    Check(version.FileVersion == "0.5.0.0" && version.FileMajorPart == 0 && version.FileMinorPart == 5 && version.FileBuildPart == 0, "VERSIONINFO strings and fixed version numbers agree");
+    Check(version.FileVersion == "0.5.1.0" && version.FileMajorPart == 0 && version.FileMinorPart == 5 && version.FileBuildPart == 1, "VERSIONINFO strings and fixed version numbers agree");
     Check(ExecutableResources.ReadIcon(copy)!.SequenceEqual(mask.IconBytes), "All icon sizes survive the native EXE resource round trip");
     Check(Resources.Manifest(source).SequenceEqual(Resources.Manifest(copy)), "The native application manifest survives resource updates");
     var beforeInvalid = SHA256.HashData(File.ReadAllBytes(copy));

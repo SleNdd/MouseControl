@@ -1,0 +1,145 @@
+using System.Reflection;
+using MouseControl.App.Services;
+using MouseControl.Core;
+
+internal static class ActivationSpreadChecks
+{
+    private static readonly MethodInfo TickMethod = typeof(RuntimeService).GetMethod("Tick", BindingFlags.NonPublic | BindingFlags.Instance)!;
+    private static void Tick(RuntimeService runtime, double dt = .01) => TickMethod.Invoke(runtime, [dt]);
+    private static void Assert(bool condition, string message)
+    {
+        if (!condition) throw new InvalidOperationException(message);
+    }
+
+    public static void Lifecycle()
+    {
+        var held = true;
+        var foreground = false;
+        var seeds = 0;
+        var activeNotifications = 0;
+        using var runtime = Create(() => held, () => foreground, () => ++seeds);
+        var profile = ProfileConfiguration.CreateDefault().Profiles[0] with
+        {
+            Motion = new(.2, -.4, .37, 2000, MotionModel.Bezier, true, true, true)
+        };
+        runtime.StatusChanged += status => { if (status == "Active") activeNotifications++; };
+        runtime.SetProfile(profile);
+        runtime.SetEnabled(true);
+        Tick(runtime);
+        Assert(seeds == 0 && runtime.EffectiveMotionSettings == profile.Motion, "Enable sampled held input.");
+        held = false; Tick(runtime); held = true; Tick(runtime);
+        var first = runtime.EffectiveMotionSettings;
+        Assert(seeds == 1 && first == ActivationRandomizer.Sample(profile.Motion, 1) && activeNotifications == 1,
+            "Accepted hold did not publish exactly one deterministic sample.");
+        for (var i = 0; i < 100; i++) Tick(runtime);
+        Assert(seeds == 1 && ReferenceEquals(runtime.EffectiveMotionSettings, first) && activeNotifications == 1,
+            "Held ticks resampled or republished activation.");
+        held = false; Tick(runtime);
+        Assert(runtime.EffectiveMotionSettings == profile.Motion, "Release retained effective hold settings.");
+        held = true; Tick(runtime);
+        Assert(seeds == 2 && runtime.EffectiveMotionSettings != first, "Fresh hold reused sampled values.");
+
+        foreach (var stop in new Action[]
+        {
+            () => { runtime.SetEnabled(false); runtime.SetEnabled(true); },
+            () => runtime.SetProfile(profile),
+            runtime.Invalidate,
+            () => { runtime.SetSuspended(true); Tick(runtime); runtime.SetSuspended(false); },
+            () => { foreground = true; Tick(runtime); foreground = false; },
+            () => Tick(runtime, .101),
+            () => runtime.SetOutputRateHz(500)
+        })
+        {
+            var previousSeeds = seeds;
+            stop();
+            Assert(runtime.EffectiveMotionSettings == profile.Motion, "Stopping retained sampled settings.");
+            runtime.SetEnabled(true);
+            for (var i = 0; i < 3; i++) Tick(runtime);
+            Assert(seeds == previousSeeds && runtime.Status != "Active", "Invalidation resampled a held input.");
+            held = false; Tick(runtime); held = true; Tick(runtime);
+            Assert(seeds == previousSeeds + 1 && runtime.EffectiveMotionSettings == ActivationRandomizer.Sample(profile.Motion, seeds),
+                "Fresh input after invalidation failed to sample exactly once.");
+        }
+
+        // Editing the switch or widths cannot replace a live sample or restart a held input.
+        profile = profile with { Motion = profile.Motion with { RandomizeOnActivation = false, HorizontalSpread = 50 } };
+        var beforeEdit = seeds;
+        runtime.SetProfile(profile); Tick(runtime);
+        Assert(seeds == beforeEdit && runtime.EffectiveMotionSettings == profile.Motion, "Edit sampled held input.");
+        held = false; Tick(runtime); held = true; Tick(runtime);
+        Assert(seeds == beforeEdit + 1 && runtime.EffectiveMotionSettings == profile.Motion, "Disabled switch changed effective values.");
+        runtime.Dispose();
+        Assert(runtime.EffectiveMotionSettings == profile.Motion, "Disposal retained a hold sample.");
+    }
+
+    public static void LegacyOutput()
+    {
+        foreach (var model in new[] { MotionModel.Classic, MotionModel.Bezier })
+        {
+            var held = false;
+            var seeds = 0;
+            var actual = new List<(int X, int Y)>();
+            using var runtime = Create(() => held, () => false, () => { seeds++; return 73; }, (x, y) => actual.Add((x, y)));
+            var profile = ProfileConfiguration.CreateDefault().Profiles[0] with
+            {
+                Motion = new(.23, -.17, .63, 2000, model, true, true)
+            };
+            runtime.SetProfile(profile); runtime.SetEnabled(true); Tick(runtime);
+            held = true;
+            var control = new MotionGenerator(profile.Motion, 73);
+            var expected = new List<(int X, int Y)>();
+            double carryX = 0, carryY = 0;
+            for (var i = 0; i < 1000; i++)
+            {
+                var dt = i % 2 == 0 ? .007 : .013;
+                Tick(runtime, dt);
+                var delta = control.Step(dt);
+                carryX += delta.Dx; carryY += delta.Dy;
+                var dx = (int)Math.Truncate(carryX); var dy = (int)Math.Truncate(carryY);
+                carryX -= dx; carryY -= dy;
+                if (dx != 0 || dy != 0) expected.Add((dx, dy));
+            }
+            Assert(seeds == 1 && actual.SequenceEqual(expected), "Randomize=false changed seeded output or consumed extra seeds.");
+            runtime.SetEnabled(false);
+            Assert(Field<double>(runtime, "_carryX") == 0 && Field<double>(runtime, "_carryY") == 0,
+                "Stopping retained fractional motion carry.");
+        }
+    }
+
+    public static void OutputFailure()
+    {
+        var held = false;
+        var fail = true;
+        var seeds = 0;
+        using var runtime = Create(() => held, () => false, () => ++seeds,
+            (_, _) => { if (fail) throw new IOException("isolated randomized sink failure"); });
+        var profile = ProfileConfiguration.CreateDefault().Profiles[0] with { Motion = new(.8, -.8, .5, 2000, RandomizeOnActivation: true) };
+        runtime.SetProfile(profile); runtime.SetEnabled(true); Tick(runtime); held = true;
+        for (var i = 0; i < 20 && runtime.Enabled; i++) Tick(runtime);
+        Assert(!runtime.Enabled && seeds == 1 && runtime.EffectiveMotionSettings == profile.Motion &&
+            runtime.Status.Contains("isolated randomized sink failure", StringComparison.Ordinal),
+            "Failed output retained a sample, retried, or did not disable.");
+        fail = false; runtime.SetEnabled(true); Tick(runtime);
+        Assert(seeds == 1, "Failure recovery sampled an already-held input.");
+        held = false; Tick(runtime); held = true; Tick(runtime);
+        Assert(seeds == 2 && runtime.EffectiveMotionSettings == ActivationRandomizer.Sample(profile.Motion, 2),
+            "Fresh failure recovery did not create a new sample.");
+    }
+
+    private static T Field<T>(RuntimeService runtime, string name) => (T)typeof(RuntimeService)
+        .GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(runtime)!;
+
+    private static RuntimeService Create(Func<bool> held, Func<bool> foreground, Func<int> seed, Action<int, int>? output = null) =>
+        new(true, output, _ => held(), foreground, null, seed, schedulerFactory: () => new IdleScheduler());
+
+    // Manual Tick calls own the test timeline; the worker only waits for disposal cancellation.
+    private sealed class IdleScheduler : IOutputScheduler
+    {
+        public void WaitForNextTick(int requestedRateHz, CancellationToken cancellationToken)
+        {
+            cancellationToken.WaitHandle.WaitOne();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        public void Dispose() { }
+    }
+}

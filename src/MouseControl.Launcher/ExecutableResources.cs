@@ -130,8 +130,8 @@ internal static class ExecutableResources
     {
         var strings = new Dictionary<string, string>
         {
-            ["FileDescription"] = name, ["FileVersion"] = "0.5.0.0", ["ProductName"] = "MouseControl",
-            ["ProductVersion"] = "0.5.0.0", ["OriginalFilename"] = name + ".exe",
+            ["FileDescription"] = name, ["FileVersion"] = "0.5.1.0", ["ProductName"] = "MouseControl",
+            ["ProductVersion"] = "0.5.1.0", ["OriginalFilename"] = name + ".exe",
             ["InternalName"] = name, ["CompanyName"] = "SleNdd", ["LegalCopyright"] = "Copyright © SleNdd"
         };
         var table = Node("040904B0", [], 1, 0, strings.Select(pair =>
@@ -141,7 +141,7 @@ internal static class ExecutableResources
         var varInfo = Node("VarFileInfo", [], 1, 0, translation);
         using var fixedStream = new MemoryStream();
         using var fixedWriter = new BinaryWriter(fixedStream);
-        foreach (uint value in new uint[] { 0xFEEF04BD, 0x10000, 5, 0, 5, 0, 0x3F, 0, 0x40004, 1, 0, 0, 0 })
+        foreach (uint value in new uint[] { 0xFEEF04BD, 0x10000, 5, 0x10000, 5, 0x10000, 0x3F, 0, 0x40004, 1, 0, 0, 0 })
             fixedWriter.Write(value);
         return Node("VS_VERSION_INFO", fixedStream.ToArray(), 0, 52, stringInfo, varInfo);
     }

@@ -22,6 +22,7 @@ public sealed class RuntimeService : IDisposable
     private readonly Func<IOutputScheduler> _schedulerFactory;
     private int _requestedOutputRateHz;
     private MotionSettings _settings = new();
+    private MotionSettings? _activeMotionSettings;
     private MotionGenerator _motion = new(new(), 0);
     private ActivationBinding _binding;
     private bool _suspended;
@@ -70,6 +71,8 @@ public sealed class RuntimeService : IDisposable
     public string BackendPort { get { lock (_sync) return _backend.Port; } }
     public bool BackendConnected { get { lock (_sync) return !_disposed && _backend.Connected; } }
     public int RequestedOutputRateHz { get { lock (_sync) return _requestedOutputRateHz; } }
+    /// <summary>Effective parameters for the current accepted hold, or saved base parameters while inactive.</summary>
+    public MotionSettings EffectiveMotionSettings { get { lock (_sync) return _activeMotionSettings ?? _settings; } }
 
     /// <summary>Changes the requested host cadence, disabling motion and requiring a fresh hold.</summary>
     public void SetOutputRateHz(int rateHz)
@@ -311,7 +314,13 @@ public sealed class RuntimeService : IDisposable
                 }
                 else
                 {
-                    if (!_active) _motion = new MotionGenerator(_settings, _seedProvider());
+                    if (!_active)
+                    {
+                        var seed = _seedProvider();
+                        var effective = ActivationRandomizer.Sample(_settings, seed);
+                        _motion = new MotionGenerator(effective, seed);
+                        _activeMotionSettings = effective;
+                    }
                     _active = true;
                     var delta = _motion.Step(dt);
                     _carryX += delta.Dx;
@@ -356,6 +365,7 @@ public sealed class RuntimeService : IDisposable
     {
         if (_active || _carryX != 0 || _carryY != 0) _motion.ResetSession();
         _active = false;
+        _activeMotionSettings = null;
         _carryX = _carryY = 0;
     }
 
